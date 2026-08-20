@@ -1,0 +1,108 @@
+# Phase-1 microservices: process-per-domain, shared Postgres + Redis.
+# Usage:
+#   docker compose -f docker-compose.yml -f docker-compose.microservices.yml up --build
+#
+# Public API: http://localhost:3000  (gateway)
+# Domain services are internal (exposed for local debug).
+
+x-backend-common: &backend-common
+  build:
+    context: .
+    dockerfile: Dockerfile
+  restart: unless-stopped
+  env_file:
+    - .env
+  environment: &backend-env
+    NODE_ENV: ${NODE_ENV:-development}
+    DATABASE_URL: postgresql://rideality:rideality_secret@postgres:5432/rideality?schema=public
+    REDIS_URL: redis://redis:6379
+    JWT_ACCESS_SECRET: ${JWT_ACCESS_SECRET}
+    JWT_REFRESH_SECRET: ${JWT_REFRESH_SECRET}
+    API_PREFIX: /api/v1
+    INTERNAL_SERVICE_SECRET: ${INTERNAL_SERVICE_SECRET:-rideality-internal-dev-secret}
+    AUTH_SERVICE_URL: http://auth-service:3001
+    USERS_SERVICE_URL: http://users-service:3002
+    FLEET_SERVICE_URL: http://fleet-service:3003
+    FINANCE_SERVICE_URL: http://finance-service:3004
+    ADMIN_SERVICE_URL: http://admin-service:3005
+  depends_on:
+    - postgres
+    - redis
+  volumes:
+    - ./uploads:/app/uploads
+    - ./logs:/app/logs
+
+services:
+  auth-service:
+    <<: *backend-common
+    container_name: rideality-auth
+    command: ["node", "dist/microservices/server.js"]
+    environment:
+      <<: *backend-env
+      SERVICE_NAME: auth
+      PORT: 3001
+    ports:
+      - "3001:3001"
+
+  users-service:
+    <<: *backend-common
+    container_name: rideality-users
+    command: ["node", "dist/microservices/server.js"]
+    environment:
+      <<: *backend-env
+      SERVICE_NAME: users
+      PORT: 3002
+    ports:
+      - "3002:3002"
+
+  fleet-service:
+    <<: *backend-common
+    container_name: rideality-fleet
+    command: ["node", "dist/microservices/server.js"]
+    environment:
+      <<: *backend-env
+      SERVICE_NAME: fleet
+      PORT: 3003
+    ports:
+      - "3003:3003"
+
+  finance-service:
+    <<: *backend-common
+    container_name: rideality-finance
+    command: ["node", "dist/microservices/server.js"]
+    environment:
+      <<: *backend-env
+      SERVICE_NAME: finance
+      PORT: 3004
+    ports:
+      - "3004:3004"
+
+  admin-service:
+    <<: *backend-common
+    container_name: rideality-admin
+    command: ["node", "dist/microservices/server.js"]
+    environment:
+      <<: *backend-env
+      SERVICE_NAME: admin
+      PORT: 3005
+    ports:
+      - "3005:3005"
+
+  api-gateway:
+    <<: *backend-common
+    container_name: rideality-gateway
+    command: ["node", "dist/microservices/server.js"]
+    environment:
+      <<: *backend-env
+      SERVICE_NAME: gateway
+      PORT: 3000
+    ports:
+      - "3000:3000"
+    depends_on:
+      - postgres
+      - redis
+      - auth-service
+      - users-service
+      - fleet-service
+      - finance-service
+      - admin-service

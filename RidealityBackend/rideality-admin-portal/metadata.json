@@ -1,0 +1,6 @@
+{
+  "name": "Rideality Admin Portal",
+  "description": "Next-generation ride-sharing admin dashboard for market operations, fleet driver management, role and permissions delegation, and financial auditing.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

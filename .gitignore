@@ -1,0 +1,32 @@
+# Dependencies / libraries
+node_modules/
+vendor/
+.venv/
+venv/
+
+# Build output
+dist/
+dist-ssr/
+build/
+coverage/
+*.tsbuildinfo
+
+# Logs and runtime data
+logs/
+*.log
+uploads/
+
+# Secrets and local env (keep .env.example)
+.env
+.env.*
+!.env.example
+secrets/
+*.pem
+*.key
+*firebase*adminsdk*.json
+
+# OS / editor
+.DS_Store
+.idea/
+.vscode/
+*.sw?
