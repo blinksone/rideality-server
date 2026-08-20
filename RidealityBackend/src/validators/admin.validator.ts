@@ -113,18 +113,59 @@ export const createUserSchema = z.object({
 });
 
 export const createPlatformStaffSchema = z.object({
-  type: z.enum(['SUB_ADMIN', 'FLEET_OWNER', 'FINANCE_USER', 'PLATFORM_SUPPORT']),
+  type: z.enum([
+    'SUB_ADMIN',
+    'GLOBAL_ADMIN',
+    'CONTINENT_ADMIN',
+    'COUNTRY_ADMIN',
+    'REGIONAL_ADMIN',
+    'CITY_ADMIN',
+    'FLEET_OWNER',
+    'REGIONAL_FLEET',
+    'FLEET_FINANCE',
+    'FLEET_SUPPORT',
+    'FINANCE_USER',
+    'PLATFORM_SUPPORT',
+  ]),
   phone: z.string().min(8).max(20),
   email: z.string().email().max(254),
   fullName: z.string().min(2).max(120),
   regionId: z.string().uuid(),
+  continentId: z.string().uuid().optional(),
+  regionalId: z.string().uuid().optional(),
+  cityId: z.string().uuid().optional(),
   legalName: z.string().min(2).max(120).optional(),
   taxId: z.string().max(50).optional(),
+});
+
+export const updatePlatformStaffSchema = z.object({
+  phone: z.string().min(8).max(20),
+  email: z.string().email().max(254),
+  fullName: z.string().min(2).max(120),
+  regionId: z.string().uuid(),
+  continentId: z.string().uuid().optional(),
+  regionalId: z.string().uuid().optional(),
+  cityId: z.string().uuid().optional(),
 });
 
 export const listPlatformStaffSchema = z.object({
   page: z.coerce.number().int().min(1).default(1),
   limit: z.coerce.number().int().min(1).max(100).default(20),
-  type: z.enum(['SUB_ADMIN', 'FLEET_OWNER', 'FINANCE_USER', 'PLATFORM_SUPPORT']).optional(),
+  type: z
+    .enum([
+      'SUB_ADMIN',
+      'GLOBAL_ADMIN',
+      'CONTINENT_ADMIN',
+      'COUNTRY_ADMIN',
+      'REGIONAL_ADMIN',
+      'CITY_ADMIN',
+      'FLEET_OWNER',
+      'REGIONAL_FLEET',
+      'FLEET_FINANCE',
+      'FLEET_SUPPORT',
+      'FINANCE_USER',
+      'PLATFORM_SUPPORT',
+    ])
+    .optional(),
   search: z.string().optional(),
 });

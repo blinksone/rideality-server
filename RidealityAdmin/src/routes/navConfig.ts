@@ -1,4 +1,4 @@
-import type { PermissionKey } from '@/api/types';
+import type { AdminRole, PermissionKey } from '@/api/types';
 import DashboardIcon from '@mui/icons-material/Dashboard';
 import PeopleIcon from '@mui/icons-material/People';
 import SecurityIcon from '@mui/icons-material/Security';
@@ -17,6 +17,8 @@ export interface NavItem {
   permission?: PermissionKey | PermissionKey[];
   anyPermission?: boolean;
   superAdminOnly?: boolean;
+  /** If set, only these admin roles see the item (Super Admin still sees all). */
+  visibleTo?: AdminRole[];
 }
 
 export interface NavGroup {
@@ -24,6 +26,33 @@ export interface NavGroup {
   label?: string;
   items: NavItem[];
 }
+
+const GEO: AdminRole[] = [
+  'GLOBAL_ADMIN',
+  'CONTINENT_ADMIN',
+  'COUNTRY_ADMIN',
+  'REGIONAL_ADMIN',
+  'CITY_ADMIN',
+];
+const FLEET_LEAD: AdminRole[] = ['FLEET_OWNER', 'REGIONAL_FLEET'];
+const FLEET_ALL: AdminRole[] = ['FLEET_OWNER', 'REGIONAL_FLEET', 'FLEET_SUPPORT', 'FLEET_FINANCE'];
+const PLATFORM_USERS: AdminRole[] = ['SUB_ADMIN', ...GEO, ...FLEET_LEAD];
+const FLEET_COMPANIES: AdminRole[] = ['SUB_ADMIN', ...GEO, 'FLEET_OWNER', 'REGIONAL_FLEET'];
+const FINANCE_VIEW: AdminRole[] = [
+  'FINANCE_USER',
+  'FLEET_OWNER',
+  'FLEET_FINANCE',
+  'GLOBAL_ADMIN',
+  'CONTINENT_ADMIN',
+  'COUNTRY_ADMIN',
+];
+const FINANCE_OPS: AdminRole[] = ['FINANCE_USER'];
+const SUPPORT: AdminRole[] = [
+  'SUB_ADMIN',
+  'PLATFORM_SUPPORT',
+  ...GEO,
+];
+const AUDIT: AdminRole[] = ['SUB_ADMIN', 'GLOBAL_ADMIN', 'CONTINENT_ADMIN', 'COUNTRY_ADMIN'];
 
 export const NAV_GROUPS: NavGroup[] = [
   {
@@ -50,25 +79,30 @@ export const NAV_GROUPS: NavGroup[] = [
         label: 'Platform Users',
         path: '/users',
         icon: PeopleIcon,
-        permission: 'manage_users',
+        permission: ['manage_users', 'ADMIN_VIEW', 'ADMIN_CREATE'],
+        anyPermission: true,
+        visibleTo: PLATFORM_USERS,
       },
       {
         label: 'Roles',
         path: '/roles',
         icon: SecurityIcon,
         permission: 'manage_roles',
+        superAdminOnly: true,
       },
       {
         label: 'Permissions',
         path: '/permissions',
         icon: KeyIcon,
         permission: 'manage_roles',
+        superAdminOnly: true,
       },
       {
         label: 'Audit log',
         path: '/audit-logs',
         icon: HistoryIcon,
         permission: 'view_reports',
+        visibleTo: AUDIT,
       },
     ],
   },
@@ -81,24 +115,28 @@ export const NAV_GROUPS: NavGroup[] = [
         path: '/finance',
         icon: AccountBalanceIcon,
         permission: 'view_finance',
+        visibleTo: FINANCE_VIEW,
       },
       {
         label: 'Wallets',
         path: '/finance/wallets',
         icon: AccountBalanceIcon,
         permission: 'view_finance',
+        visibleTo: FINANCE_VIEW,
       },
       {
         label: 'Adjustments',
         path: '/finance/adjustments',
         icon: AccountBalanceIcon,
         permission: 'view_finance',
+        visibleTo: FINANCE_OPS,
       },
       {
         label: 'Payouts',
         path: '/finance/payouts',
         icon: AccountBalanceIcon,
         permission: 'view_finance',
+        visibleTo: FINANCE_VIEW,
       },
     ],
   },
@@ -110,14 +148,17 @@ export const NAV_GROUPS: NavGroup[] = [
         label: 'Fleet',
         path: '/fleet',
         icon: LocalShippingIcon,
-        permission: 'manage_fleets',
+        permission: ['manage_fleets', 'FLEET_VIEW'],
+        anyPermission: true,
+        visibleTo: FLEET_COMPANIES,
       },
       {
         label: 'Support',
         path: '/support',
         icon: SupportAgentIcon,
-        permission: ['manage_notes', 'manage_users'],
+        permission: ['manage_notes', 'manage_users', 'TICKET_VIEW'],
         anyPermission: true,
+        visibleTo: SUPPORT,
       },
     ],
   },
@@ -126,7 +167,26 @@ export const NAV_GROUPS: NavGroup[] = [
 /** @deprecated Use NAV_GROUPS */
 export const NAV_ITEMS: NavItem[] = NAV_GROUPS.flatMap((group) => group.items);
 
-export function getNavLabelForPath(pathname: string): string {
+const FLEET_TEAM_ROLES: AdminRole[] = FLEET_ALL;
+
+export function isFleetTeamRole(role?: AdminRole | null) {
+  return Boolean(role && FLEET_TEAM_ROLES.includes(role));
+}
+
+export function navItemLabel(item: NavItem, role?: AdminRole | null): string {
+  if (item.path === '/users' && isFleetTeamRole(role)) return 'Fleet Team';
+  if (item.path === '/fleet' && isFleetTeamRole(role)) return 'My Fleet';
+  return item.label;
+}
+
+export function navGroupLabel(group: NavGroup, role?: AdminRole | null): string | undefined {
+  if (!group.label) return group.label;
+  if (isFleetTeamRole(role) && group.id === 'access') return 'Team';
+  if (isFleetTeamRole(role) && group.id === 'operations') return 'Fleet';
+  return group.label;
+}
+
+export function getNavLabelForPath(pathname: string, role?: AdminRole | null): string {
   let best: NavItem | null = null;
   for (const group of NAV_GROUPS) {
     for (const item of group.items) {
@@ -136,5 +196,5 @@ export function getNavLabelForPath(pathname: string): string {
       }
     }
   }
-  return best?.label ?? 'Dashboard';
+  return best ? navItemLabel(best, role) : 'Dashboard';
 }

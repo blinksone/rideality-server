@@ -76,7 +76,7 @@ export default function CreateFleetStaffDialog({
     mutationFn: () =>
       createFleetStaffUser(companyId, {
         role,
-        fleetRegionId: role === 'regional' ? cityId : undefined,
+        fleetRegionId: cityId || undefined,
         fullName: fullName.trim(),
         email: email.trim(),
         phone: submitPhone,
@@ -117,7 +117,7 @@ export default function CreateFleetStaffDialog({
             <Alert severity="info">
               {role === 'regional'
                 ? 'This person manages drivers and documents for one city. Each city can have only one regional user. A temporary password is shown once.'
-                : 'This person handles driver support across all cities. They can view documents but cannot approve them.'}
+                : 'This person handles driver support in your city. They can view drivers and tickets but cannot approve documents.'}
             </Alert>
             {role === 'regional' && cities.length === 0 && (
               <Alert severity="warning">
@@ -156,7 +156,7 @@ export default function CreateFleetStaffDialog({
                 },
               }}
             />
-            {role === 'regional' && (
+            {(role === 'regional' || role === 'support') && (
             <TextField
               select
               fullWidth

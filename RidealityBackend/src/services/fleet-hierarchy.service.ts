@@ -1,4 +1,5 @@
 import {
+  AdminRole,
   DocumentStatus,
   DriverOnboardingStatus,
   FleetCompanyStatus,
@@ -10,10 +11,10 @@ import {
 } from '@prisma/client';
 import { prisma } from '../lib/prisma';
 import { ForbiddenError, NotFoundError, ValidationError, ConflictError } from '../utils/errors';
-import { createAdminUser } from './admin.service';
+import { createAdminUser, getAdminUserDetail } from './admin.service';
 import { createFleetCompany } from './fleet.service';
 import { generateTemporaryPassword, hashPassword } from '../utils/crypto';
-import { isValidE164, toE164WithPrefix } from '../utils/phone';
+import { isValidE164, normalizePhone, toE164WithPrefix } from '../utils/phone';
 import {
   assertCanReviewFleetDocuments,
   assertFleetAccess,
@@ -22,29 +23,92 @@ import {
   normalizeMemberRole,
   notStaffDriverUserFilter,
 } from './fleet-access';
+import {
+  assertCanInvite,
+  assertTargetUserInScope,
+  getAdminAssignment,
+  isSuperAdminRole,
+  rolesInvitableFrom,
+  scopedVisibleUserWhere,
+  scopeAllows,
+  upsertAdminAssignment,
+  type AdminAssignmentRecord,
+} from './admin-scope.service';
 
 export const PLATFORM_STAFF_TYPES = [
   'SUB_ADMIN',
+  'GLOBAL_ADMIN',
+  'CONTINENT_ADMIN',
+  'COUNTRY_ADMIN',
+  'REGIONAL_ADMIN',
+  'CITY_ADMIN',
   'FLEET_OWNER',
+  'REGIONAL_FLEET',
+  'FLEET_FINANCE',
+  'FLEET_SUPPORT',
   'FINANCE_USER',
   'PLATFORM_SUPPORT',
 ] as const;
 
 export type PlatformStaffType = (typeof PLATFORM_STAFF_TYPES)[number];
 
-const STAFF_TYPE_TO_ROLE: Record<Exclude<PlatformStaffType, 'FLEET_OWNER'>, PlatformRole> = {
-  SUB_ADMIN: PlatformRole.SUB_ADMIN,
-  FINANCE_USER: PlatformRole.FINANCE_OFFICER,
-  PLATFORM_SUPPORT: PlatformRole.SUPPORT_AGENT,
-};
+const FLEET_TEAM_TYPES = ['REGIONAL_FLEET', 'FLEET_FINANCE', 'FLEET_SUPPORT'] as const;
 
-const ROLE_TO_STAFF_TYPE: Partial<Record<PlatformRole, PlatformStaffType>> = {
-  [PlatformRole.SUB_ADMIN]: 'SUB_ADMIN',
-  [PlatformRole.ADMIN]: 'SUB_ADMIN',
-  [PlatformRole.FINANCE_OFFICER]: 'FINANCE_USER',
-  [PlatformRole.SUPPORT_AGENT]: 'PLATFORM_SUPPORT',
-  [PlatformRole.FLEET_OWNER]: 'FLEET_OWNER',
-};
+function isFleetTeamType(type: PlatformStaffType): type is (typeof FLEET_TEAM_TYPES)[number] {
+  return (FLEET_TEAM_TYPES as readonly string[]).includes(type);
+}
+
+function staffTypeToPlatformRole(type: PlatformStaffType): PlatformRole {
+  switch (type) {
+    case 'FLEET_OWNER':
+      return PlatformRole.FLEET_OWNER;
+    case 'REGIONAL_FLEET':
+      return PlatformRole.FLEET_MANAGER;
+    case 'FLEET_FINANCE':
+    case 'FINANCE_USER':
+      return PlatformRole.FINANCE_OFFICER;
+    case 'FLEET_SUPPORT':
+    case 'PLATFORM_SUPPORT':
+      return PlatformRole.SUPPORT_AGENT;
+    default:
+      return PlatformRole.SUB_ADMIN;
+  }
+}
+
+function staffTypeToAdminRole(type: PlatformStaffType): AdminRole {
+  return type;
+}
+
+async function findActorFleetCompany(actorId: string) {
+  const owned = await prisma.fleetCompany.findFirst({
+    where: { ownerUserId: actorId },
+    orderBy: { createdAt: 'desc' },
+  });
+  if (owned) return owned;
+  const membership = await prisma.fleetMembership.findFirst({
+    where: { userId: actorId, status: FleetMemberStatus.active },
+    include: { fleetCompany: true },
+    orderBy: { createdAt: 'desc' },
+  });
+  return membership?.fleetCompany ?? null;
+}
+
+async function ensureFleetRegionForGeoCity(companyId: string, geoCityId: string) {
+  const existing = await prisma.fleetRegion.findFirst({
+    where: { fleetCompanyId: companyId, geoCityId },
+  });
+  if (existing) return existing;
+  const city = await prisma.city.findUnique({ where: { id: geoCityId } });
+  if (!city) throw new NotFoundError('City not found');
+  return prisma.fleetRegion.create({
+    data: {
+      fleetCompanyId: companyId,
+      name: city.name,
+      provinceId: city.provinceId,
+      geoCityId: city.id,
+    },
+  });
+}
 
 export async function listPublicFleetCompanies(query?: { regionId?: string; regionCode?: string }) {
   let regionId = query?.regionId;
@@ -251,6 +315,10 @@ export async function inviteRegionalFleet(
   if (!access.canInviteRegional) {
     throw new ForbiddenError('Only fleet owner can invite regional fleet admins');
   }
+  const assignment = await getAdminAssignment(requesterId);
+  if (assignment) {
+    await assertCanInvite(assignment, 'REGIONAL_FLEET', { cityId: regionId });
+  }
   await assertFleetRegion(companyId, regionId);
   await assertCityHasNoRegionalUser(companyId, regionId);
   return createScopedInvite(companyId, requesterId, {
@@ -263,16 +331,26 @@ export async function inviteRegionalFleet(
 export async function inviteFleetSupport(
   companyId: string,
   requesterId: string,
-  data: { email: string },
+  data: { email: string; fleetRegionId?: string },
 ) {
   const access = await assertFleetAccess(companyId, requesterId);
   if (!access.canInviteSupport) {
-    throw new ForbiddenError('Only fleet owner can invite fleet support');
+    throw new ForbiddenError('Only regional fleet can invite fleet support');
   }
+  const assignment = await getAdminAssignment(requesterId);
+  let cityId = data.fleetRegionId ?? access.fleetRegionId ?? assignment?.cityId ?? null;
+  if (assignment) {
+    const scoped = await assertCanInvite(assignment, 'FLEET_SUPPORT', { cityId });
+    cityId = scoped.cityId ?? null;
+  }
+  if (!cityId) {
+    throw new ValidationError('City is required for fleet support');
+  }
+  await assertFleetRegion(companyId, cityId);
   return createScopedInvite(companyId, requesterId, {
     email: data.email,
     role: FleetMemberRole.support,
-    fleetRegionId: null,
+    fleetRegionId: cityId,
   });
 }
 
@@ -293,18 +371,32 @@ export async function createFleetStaffUser(
       : FleetMemberRole.support;
 
   const access = await assertFleetAccess(companyId, requesterId);
-  if (memberRole === FleetMemberRole.regional && !access.canInviteRegional) {
-    throw new ForbiddenError('Only fleet owner can create regional fleet users');
+  const assignment = await getAdminAssignment(requesterId);
+  if (memberRole === FleetMemberRole.regional) {
+    if (!access.canInviteRegional) {
+      throw new ForbiddenError('Only fleet owner can create regional fleet users');
+    }
+    if (assignment) await assertCanInvite(assignment, 'REGIONAL_FLEET', { cityId: data.fleetRegionId });
   }
-  if (memberRole === FleetMemberRole.support && !access.canInviteSupport) {
-    throw new ForbiddenError('Only fleet owner can create fleet support users');
+  if (memberRole === FleetMemberRole.support) {
+    if (!access.canInviteSupport) {
+      throw new ForbiddenError('Only regional fleet can create fleet support users');
+    }
+    if (assignment) {
+      const scoped = await assertCanInvite(assignment, 'FLEET_SUPPORT', { cityId: data.fleetRegionId });
+      data.fleetRegionId = scoped.cityId ?? data.fleetRegionId;
+    } else if (!data.fleetRegionId) {
+      data.fleetRegionId = access.fleetRegionId ?? undefined;
+    }
   }
 
-  let region: { id: string; name: string } | null = null;
+  let region: Awaited<ReturnType<typeof assertFleetRegion>> | null = null;
   if (memberRole === FleetMemberRole.regional) {
     if (!data.fleetRegionId) throw new ValidationError('City is required for regional fleet');
     region = await assertFleetRegion(companyId, data.fleetRegionId);
     await assertCityHasNoRegionalUser(companyId, data.fleetRegionId);
+  } else if (data.fleetRegionId) {
+    region = await assertFleetRegion(companyId, data.fleetRegionId);
   }
 
   const company = await prisma.fleetCompany.findUnique({
@@ -367,6 +459,14 @@ export async function createFleetStaffUser(
     return created;
   });
 
+  await upsertAdminAssignment({
+    userId: user.id,
+    role: memberRole === FleetMemberRole.regional ? 'REGIONAL_FLEET' : 'FLEET_SUPPORT',
+    countryId: company.regionId,
+    cityId: region?.geoCityId ?? null,
+    invitedByUserId: requesterId,
+  });
+
   await prisma.auditLog.create({
     data: {
       actorId: requesterId,
@@ -396,7 +496,37 @@ export async function reviewFleetDocument(
   data: { status: 'approved' | 'rejected' | 'APPROVED' | 'REJECTED'; rejectionReason?: string },
 ) {
   const access = await assertCanReviewFleetDocuments(companyId, requesterId);
+  return applyFleetDocumentReview(companyId, requesterId, documentId, data, access.fleetRegionId);
+}
 
+export async function reviewFleetDocumentById(
+  requesterId: string,
+  documentId: string,
+  data: { status: 'approved' | 'rejected'; rejectionReason?: string },
+  assignmentCityId?: string | null,
+) {
+  const doc = await prisma.verificationDocument.findUnique({
+    where: { id: documentId },
+    include: { user: { include: { driverProfile: true } } },
+  });
+  if (!doc?.user.driverProfile?.fleetCompanyId) {
+    throw new NotFoundError('Document not found');
+  }
+  const companyId = doc.user.driverProfile.fleetCompanyId;
+  const cityId = assignmentCityId ?? doc.user.driverProfile.fleetRegionId;
+  await assertCanReviewFleetDocuments(companyId, requesterId, {
+    fleetRegionId: cityId ?? undefined,
+  });
+  return applyFleetDocumentReview(companyId, requesterId, documentId, data, cityId ?? null);
+}
+
+async function applyFleetDocumentReview(
+  companyId: string,
+  requesterId: string,
+  documentId: string,
+  data: { status: 'approved' | 'rejected' | 'APPROVED' | 'REJECTED'; rejectionReason?: string },
+  fleetRegionId: string | null,
+) {
   const doc = await prisma.verificationDocument.findUnique({
     where: { id: documentId },
     include: {
@@ -414,7 +544,7 @@ export async function reviewFleetDocument(
   if (!driver || driver.fleetCompanyId !== companyId) {
     throw new NotFoundError('Document does not belong to this fleet');
   }
-  if (access.fleetRegionId && driver.fleetRegionId !== access.fleetRegionId) {
+  if (fleetRegionId && driver.fleetRegionId !== fleetRegionId) {
     throw new ForbiddenError('No access to documents outside your city');
   }
   const approved = data.status.toLowerCase() === 'approved';
@@ -437,7 +567,7 @@ export async function reviewFleetDocument(
       actorId: requesterId,
       fleetCompanyId: companyId,
       targetUserId: doc.userId,
-      action: `document.review.${data.status}`,
+      action: `document.review.${approved ? 'approved' : 'rejected'}`,
       details: { documentId, type: doc.type },
     },
   });
@@ -454,40 +584,37 @@ export async function createPlatformStaffUser(
     email: string;
     fullName: string;
     regionId: string;
+    continentId?: string;
+    regionalId?: string;
+    cityId?: string;
     legalName?: string;
     taxId?: string;
   },
   ipAddress?: string,
 ) {
-  if (!actorRoles.includes(PlatformRole.SUPER_ADMIN)) {
-    throw new ForbiddenError('Only SUPER_ADMIN can create platform staff');
+  const adminRole = staffTypeToAdminRole(data.type);
+  if (data.type === 'FLEET_OWNER' && !data.legalName?.trim()) {
+    throw new ValidationError('Fleet company legal name is required');
   }
-
-  if (data.type === 'FLEET_OWNER') {
-    if (!data.legalName?.trim()) {
-      throw new ValidationError('Fleet company legal name is required');
-    }
-    const user = await createAdminUser(
-      actorId,
-      actorRoles,
-      {
-        phone: data.phone,
-        email: data.email,
-        fullName: data.fullName,
-        regionId: data.regionId,
-        platformRole: PlatformRole.FLEET_OWNER,
-      },
-      ipAddress,
-    );
-    const company = await createFleetCompany(user.id, {
-      legalName: data.legalName,
-      taxId: data.taxId,
-      regionId: data.regionId,
-    });
-    return { ...user, fleetCompany: company, staffType: 'FLEET_OWNER' as const };
+  const inviter = await getAdminAssignment(actorId);
+  if (!actorRoles.includes(PlatformRole.SUPER_ADMIN) && !inviter) {
+    throw new ForbiddenError('Only assigned admins can create portal users');
   }
+  const scoped = inviter
+    ? await assertCanInvite(inviter, adminRole, {
+        continentId: data.continentId,
+        countryId: data.regionId,
+        regionalId: data.regionalId,
+        cityId: data.cityId,
+      })
+    : {
+        continentId: data.continentId,
+        countryId: data.regionId,
+        regionalId: data.regionalId,
+        cityId: data.cityId,
+      };
 
-  const platformRole = STAFF_TYPE_TO_ROLE[data.type];
+  const platformRole = staffTypeToPlatformRole(data.type);
   const user = await createAdminUser(
     actorId,
     actorRoles,
@@ -499,42 +626,268 @@ export async function createPlatformStaffUser(
       platformRole,
     },
     ipAddress,
+    { allowDelegatedCreate: true },
   );
+
+  await upsertAdminAssignment({
+    userId: user.id,
+    role: adminRole,
+    continentId: scoped.continentId,
+    countryId: scoped.countryId,
+    regionalId: scoped.regionalId,
+    cityId: scoped.cityId,
+    invitedByUserId: actorId,
+  });
+
+  if (data.type === 'FLEET_OWNER') {
+    const company = await createFleetCompany(user.id, {
+      legalName: data.legalName!,
+      taxId: data.taxId,
+      regionId: data.regionId,
+      continentId: scoped.continentId,
+      regionalId: scoped.regionalId,
+      cityId: scoped.cityId,
+      invitedByUserId: actorId,
+    });
+    return { ...user, fleetCompany: company, staffType: data.type };
+  }
+
+  if (isFleetTeamType(data.type)) {
+    const company = await findActorFleetCompany(actorId);
+    if (!company) {
+      throw new ValidationError('You must belong to a fleet company to create this user');
+    }
+    const geoCityId = scoped.cityId;
+    if (!geoCityId) throw new ValidationError('City is required for fleet team users');
+    const fleetRegion = await ensureFleetRegionForGeoCity(company.id, geoCityId);
+
+    if (data.type === 'REGIONAL_FLEET') {
+      await assertCityHasNoRegionalUser(company.id, fleetRegion.id);
+    }
+
+    const memberRole =
+      data.type === 'REGIONAL_FLEET'
+        ? FleetMemberRole.regional
+        : data.type === 'FLEET_SUPPORT'
+          ? FleetMemberRole.support
+          : null;
+
+    if (memberRole) {
+      await prisma.fleetMembership.create({
+        data: {
+          fleetCompanyId: company.id,
+          userId: user.id,
+          role: memberRole,
+          fleetRegionId: fleetRegion.id,
+          invitedByUserId: actorId,
+          status: FleetMemberStatus.active,
+        },
+      });
+    }
+
+    return { ...user, fleetCompany: company, staffType: data.type };
+  }
+
   return { ...user, staffType: data.type };
 }
 
-export async function listPlatformStaffUsers(query: {
-  page: number;
-  limit: number;
-  type?: PlatformStaffType;
-  search?: string;
-}) {
-  const roleFilter: PlatformRole[] = query.type
-    ? query.type === 'SUB_ADMIN'
-      ? [PlatformRole.SUB_ADMIN, PlatformRole.ADMIN]
-      : query.type === 'FINANCE_USER'
-        ? [PlatformRole.FINANCE_OFFICER]
-        : query.type === 'PLATFORM_SUPPORT'
-          ? [PlatformRole.SUPPORT_AGENT]
-          : [PlatformRole.FLEET_OWNER]
-    : [
-        PlatformRole.SUB_ADMIN,
-        PlatformRole.ADMIN,
-        PlatformRole.FINANCE_OFFICER,
-        PlatformRole.SUPPORT_AGENT,
-        PlatformRole.FLEET_OWNER,
-      ];
+export async function updatePlatformStaffUser(
+  actorId: string,
+  actorRoles: PlatformRole[],
+  targetUserId: string,
+  data: {
+    phone: string;
+    email: string;
+    fullName: string;
+    regionId: string;
+    continentId?: string;
+    regionalId?: string;
+    cityId?: string;
+  },
+  ipAddress?: string,
+) {
+  const actor = await getAdminAssignment(actorId);
+  const isSuper = actorRoles.includes(PlatformRole.SUPER_ADMIN) || isSuperAdminRole(actor?.role);
+  if (!isSuper && !actor) {
+    throw new ForbiddenError('Only assigned admins can update portal users');
+  }
 
+  await assertTargetUserInScope(actor ?? null, targetUserId);
+
+  const target = await prisma.user.findUnique({
+    where: { id: targetUserId },
+    include: { adminAssignment: true, profile: true },
+  });
+  if (!target || target.deletedAt) throw new NotFoundError('User not found');
+  if (!target.adminAssignment) throw new ValidationError('This user is not a portal admin');
+  if (target.adminAssignment.role === 'SUPER_ADMIN') {
+    throw new ForbiddenError('Super Admin cannot be updated this way');
+  }
+
+  const adminRole = target.adminAssignment.role;
+  if (!isSuper && actor && !rolesInvitableFrom(actor.role).includes(adminRole)) {
+    throw new ForbiddenError(`You cannot update ${adminRole} users`);
+  }
+
+  const scoped = actor
+    ? await assertCanInvite(
+        actor,
+        adminRole,
+        {
+          continentId: data.continentId,
+          countryId: data.regionId,
+          regionalId: data.regionalId,
+          cityId: data.cityId,
+        },
+        { skipInviteCheck: true },
+      )
+    : {
+        continentId: data.continentId,
+        countryId: data.regionId,
+        regionalId: data.regionalId,
+        cityId: data.cityId,
+      };
+
+  const region = await prisma.region.findUnique({ where: { id: data.regionId } });
+  if (!region || !region.isActive) throw new NotFoundError('Region not found');
+
+  const phone = normalizePhone(data.phone);
+  if (!isValidE164(phone)) {
+    throw new ValidationError('Invalid phone number. Use international format, e.g. +14155552671');
+  }
+  const prefix = region.phonePrefix?.replace(/\s/g, '') || '';
+  if (prefix && !phone.startsWith(prefix)) {
+    throw new ValidationError(`Phone must start with region prefix ${prefix}`, {
+      regionCode: region.code,
+      phonePrefix: prefix,
+    });
+  }
+
+  const email = data.email.trim().toLowerCase();
+  const existingPhone = await prisma.user.findFirst({
+    where: { phone, regionId: data.regionId, deletedAt: null, NOT: { id: targetUserId } },
+  });
+  if (existingPhone) {
+    throw new ConflictError('Phone already registered in this region', 'PHONE_EXISTS');
+  }
+  const existingEmail = await prisma.user.findFirst({
+    where: { email, deletedAt: null, NOT: { id: targetUserId } },
+  });
+  if (existingEmail) {
+    throw new ConflictError('Email already in use', 'EMAIL_EXISTS');
+  }
+
+  const proposed = {
+    ...target.adminAssignment,
+    continentId: scoped.continentId ?? null,
+    countryId: scoped.countryId ?? null,
+    regionalId: scoped.regionalId ?? null,
+    cityId: scoped.cityId ?? null,
+  };
+  const invitees = await prisma.adminAssignment.findMany({
+    where: { invitedById: target.adminAssignment.id },
+    select: {
+      role: true,
+      continentId: true,
+      countryId: true,
+      regionalId: true,
+      cityId: true,
+      user: { select: { profile: { select: { fullName: true } }, email: true } },
+    },
+  });
+  for (const child of invitees) {
+    const stillInScope = await scopeAllows(proposed, {
+      continentId: child.continentId,
+      countryId: child.countryId,
+      regionalId: child.regionalId,
+      cityId: child.cityId,
+    });
+    if (!stillInScope) {
+      const name = child.user.profile?.fullName ?? child.user.email ?? child.role;
+      throw new ValidationError(
+        `Cannot change assigned area while ${name} still reports here. Reassign that team member first.`,
+      );
+    }
+  }
+
+  await prisma.$transaction(async (tx) => {
+    await tx.user.update({
+      where: { id: targetUserId },
+      data: {
+        phone,
+        email,
+        region: { connect: { id: data.regionId } },
+        profile: {
+          upsert: {
+            create: { fullName: data.fullName.trim() },
+            update: { fullName: data.fullName.trim() },
+          },
+        },
+      },
+    });
+  });
+
+  await upsertAdminAssignment({
+    userId: targetUserId,
+    role: adminRole,
+    continentId: scoped.continentId,
+    countryId: scoped.countryId,
+    regionalId: scoped.regionalId,
+    cityId: scoped.cityId,
+  });
+
+  await prisma.auditLog.create({
+    data: {
+      actorId,
+      targetUserId,
+      action: 'user.update',
+      details: {
+        role: adminRole,
+        fullName: data.fullName.trim(),
+        email,
+        phone,
+        continentId: scoped.continentId ?? null,
+        countryId: scoped.countryId ?? null,
+        regionalId: scoped.regionalId ?? null,
+        cityId: scoped.cityId ?? null,
+      },
+      ipAddress,
+    },
+  });
+
+  return getAdminUserDetail(targetUserId);
+}
+
+export async function listPlatformStaffUsers(
+  query: {
+    page: number;
+    limit: number;
+    type?: PlatformStaffType;
+    search?: string;
+  },
+  assignment?: AdminAssignmentRecord | null,
+) {
+  const roles = (query.type ? [query.type] : [...PLATFORM_STAFF_TYPES]) as AdminRole[];
   const where = {
     deletedAt: null,
-    platformRoles: { some: { role: { in: roleFilter } } },
-    ...(query.search && {
-      OR: [
-        { phone: { contains: query.search } },
-        { email: { contains: query.search, mode: 'insensitive' as const } },
-        { profile: { fullName: { contains: query.search, mode: 'insensitive' as const } } },
-      ],
-    }),
+    AND: [
+      scopedVisibleUserWhere(assignment ?? null, {
+        excludeUserId: assignment?.userId,
+        staffOnly: true,
+      }),
+      { adminAssignment: { is: { role: { in: roles } } } },
+      ...(query.search
+        ? [
+            {
+              OR: [
+                { phone: { contains: query.search } },
+                { email: { contains: query.search, mode: 'insensitive' as const } },
+                { profile: { fullName: { contains: query.search, mode: 'insensitive' as const } } },
+              ],
+            },
+          ]
+        : []),
+    ],
   };
 
   const [users, total] = await Promise.all([
@@ -546,6 +899,14 @@ export async function listPlatformStaffUsers(query: {
       include: {
         profile: true,
         platformRoles: true,
+        adminAssignment: {
+          include: {
+            continent: { select: { name: true, code: true } },
+            country: { select: { name: true, code: true } },
+            province: { select: { name: true } },
+            city: { select: { name: true } },
+          },
+        },
         ownedFleets: {
           select: { id: true, legalName: true, status: true },
           take: 5,
@@ -557,18 +918,22 @@ export async function listPlatformStaffUsers(query: {
 
   return {
     users: users.map((u) => {
-      const roles = u.platformRoles.map((r) => r.role);
-      const staffType =
-        ROLE_TO_STAFF_TYPE[roles.find((r) => ROLE_TO_STAFF_TYPE[r]) ?? PlatformRole.ADMIN] ??
-        'SUB_ADMIN';
+      const assignmentRow = u.adminAssignment;
+      const scopeParts = [
+        assignmentRow?.continent ? assignmentRow.continent.name : null,
+        assignmentRow?.country ? `${assignmentRow.country.name} (${assignmentRow.country.code})` : null,
+        assignmentRow?.province?.name ?? null,
+        assignmentRow?.city?.name ?? null,
+      ].filter(Boolean);
       return {
         id: u.id,
         phone: u.phone,
         email: u.email,
         status: u.status,
         fullName: u.profile?.fullName,
-        roles,
-        staffType,
+        roles: u.platformRoles.map((r) => r.role),
+        staffType: (assignmentRow?.role ?? 'SUB_ADMIN') as PlatformStaffType,
+        scopeLabel: scopeParts.join(' / ') || null,
         fleets: u.ownedFleets,
         createdAt: u.createdAt,
       };
@@ -673,7 +1038,14 @@ export async function getFleetCityProfile(
         fleetCompanyId: companyId,
         fleetRegionId: regionId,
         status: FleetMemberStatus.active,
-        role: { in: [FleetMemberRole.regional, FleetMemberRole.manager] },
+        role: {
+          in: [
+            FleetMemberRole.regional,
+            FleetMemberRole.manager,
+            FleetMemberRole.support,
+            FleetMemberRole.dispatcher,
+          ],
+        },
       },
       include: { user: { include: { profile: true } } },
       orderBy: { createdAt: 'asc' },
@@ -794,14 +1166,22 @@ export async function getFleetCityProfile(
     })),
   ];
 
+  const cityStaff = regionalStaff;
+  const mappedStaff = (m: (typeof cityStaff)[number]) => ({
+    userId: m.userId,
+    fullName: m.user.profile?.fullName ?? null,
+    phone: m.user.phone,
+    email: m.user.email,
+  });
+
   return {
     city: { id: region.id, name: region.name, createdAt: region.createdAt },
-    regionalAdmins: regionalStaff.map((m) => ({
-      userId: m.userId,
-      fullName: m.user.profile?.fullName ?? null,
-      phone: m.user.phone,
-      email: m.user.email,
-    })),
+    regionalAdmins: cityStaff
+      .filter((m) => m.role === FleetMemberRole.regional || m.role === FleetMemberRole.manager)
+      .map(mappedStaff),
+    supportStaff: cityStaff
+      .filter((m) => m.role === FleetMemberRole.support || m.role === FleetMemberRole.dispatcher)
+      .map(mappedStaff),
     stats: {
       drivers: mappedDrivers.length,
       online: mappedDrivers.filter((d) => d.isOnline).length,

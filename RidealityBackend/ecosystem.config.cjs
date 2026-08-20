@@ -14,8 +14,8 @@ module.exports = {
         OTP_RETURN_CODE: 'true',
         OTP_DEV_BYPASS_CODE: '123456',
         // FCM / Firebase Admin (service account JSON on disk — not committed)
-        FIREBASE_SERVICE_ACCOUNT_PATH: '/opt/rideality/secrets/rideality-firebase-adminsdk.json',
-        GOOGLE_APPLICATION_CREDENTIALS: '/opt/rideality/secrets/rideality-firebase-adminsdk.json',
+        FIREBASE_SERVICE_ACCOUNT_PATH: '/opt/rideality_backup/secrets/rideality-firebase-adminsdk.json',
+        GOOGLE_APPLICATION_CREDENTIALS: '/opt/rideality_backup/secrets/rideality-firebase-adminsdk.json',
         FIREBASE_PROJECT_ID: 'rideality',
       },
       error_file: './logs/pm2-error.log',

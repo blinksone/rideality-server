@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useParams } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
@@ -25,7 +25,6 @@ import {
   listManagedFleetRegions,
   removeFleetDriver,
   updateFleetCompany,
-  type FleetRegionRow,
 } from '@/api/fleet.api';
 import { listUsers } from '@/api/users.api';
 import { listActiveRegions } from '@/api/regions.api';
@@ -34,11 +33,14 @@ import DataTable, { type DataTableColumn } from '@/components/DataTable';
 import PageHeader from '@/components/PageHeader';
 import ConfirmDialog from '@/components/ConfirmDialog';
 import { usePermissions } from '@/hooks/usePermissions';
+import { useAdminScope } from '@/hooks/useAdminScope';
 import { useNotify } from '@/services/notification';
 import type { FleetCompanyStatus, FleetDriver, UserListItem } from '@/api/types';
 import { formatDate, formatLabel } from '@/utils/format';
 import { useDebounce } from '@/hooks/useDebounce';
 import FleetWalletPanel from '@/modules/finance/FleetWalletPanel';
+
+type FleetTab = 'overview' | 'drivers' | 'wallet';
 
 function statusColor(status: string): 'default' | 'success' | 'warning' | 'error' {
   if (status === 'active') return 'success';
@@ -49,7 +51,7 @@ function statusColor(status: string): 'default' | 'success' | 'warning' | 'error
 
 export default function CompanyDetailPage() {
   const { id = '' } = useParams();
-  const [tab, setTab] = useState(0);
+  const [tab, setTab] = useState<FleetTab>('overview');
   const [driverRegionId, setDriverRegionId] = useState<string | null>(null);
   const [legalName, setLegalName] = useState('');
   const [taxId, setTaxId] = useState('');
@@ -62,9 +64,25 @@ export default function CompanyDetailPage() {
   const debouncedOwnerSearch = useDebounce(ownerSearch);
   const notify = useNotify();
   const queryClient = useQueryClient();
-  const { can } = usePermissions();
+  const { can, isSuperAdmin } = usePermissions();
+  const { role, scopeType, cityId } = useAdminScope();
   const canManageFleet = can('manage_fleets');
-  const canAssignOwner = can('manage_users');
+  const canAssignOwner =
+    isSuperAdmin ||
+    role === 'GLOBAL_ADMIN' ||
+    role === 'CONTINENT_ADMIN' ||
+    role === 'COUNTRY_ADMIN' ||
+    role === 'SUB_ADMIN';
+  const canViewWallet = canManageFleet || can('view_finance') || can('WALLET_VIEW');
+  const canViewDrivers = canManageFleet || can('manage_drivers') || can('DRIVER_VIEW');
+  const isCityScoped = scopeType === 'CITY';
+
+  const tabs = useMemo(() => {
+    const items: { key: FleetTab; label: string }[] = [{ key: 'overview', label: 'Overview' }];
+    if (canViewDrivers) items.push({ key: 'drivers', label: 'Drivers' });
+    if (canViewWallet) items.push({ key: 'wallet', label: 'Wallet' });
+    return items;
+  }, [canViewDrivers, canViewWallet]);
 
   const { data: company, isLoading } = useQuery({
     queryKey: ['fleet-company', id],
@@ -81,13 +99,13 @@ export default function CompanyDetailPage() {
   const { data: drivers = [], isLoading: driversLoading } = useQuery({
     queryKey: ['fleet-drivers', id, driverRegionId],
     queryFn: () => listFleetDrivers(id, { regionId: driverRegionId ?? undefined }),
-    enabled: Boolean(id) && tab === 2,
+    enabled: Boolean(id) && tab === 'drivers',
   });
 
-  const { data: cities = [], isLoading: citiesLoading } = useQuery({
+  const { data: cities = [] } = useQuery({
     queryKey: ['fleet-managed-regions', id],
     queryFn: () => listManagedFleetRegions(id),
-    enabled: Boolean(id) && (tab === 1 || Boolean(driverRegionId)),
+    enabled: Boolean(id),
   });
 
   const { data: ownerCandidatesData, isFetching: ownerCandidatesLoading } = useQuery({
@@ -138,6 +156,16 @@ export default function CompanyDetailPage() {
   });
 
   useEffect(() => {
+    if (!tabs.some((t) => t.key === tab)) setTab('overview');
+  }, [tab, tabs]);
+
+  useEffect(() => {
+    if (!isCityScoped || !cityId || cities.length === 0) return;
+    const homeCity = cities.find((c) => c.geoCityId === cityId) ?? cities[0];
+    if (homeCity) setDriverRegionId(homeCity.id);
+  }, [isCityScoped, cityId, cities]);
+
+  useEffect(() => {
     if (company) {
       setLegalName(company.legalName);
       setTaxId(company.taxId ?? '');
@@ -160,11 +188,11 @@ export default function CompanyDetailPage() {
     return <Typography>Loading company...</Typography>;
   }
 
-  const cityColumns: DataTableColumn<FleetRegionRow>[] = [
-    { id: 'name', label: 'City', render: (r) => r.name },
-    { id: 'drivers', label: 'Drivers', render: (r) => r.driverCount },
-    { id: 'createdAt', label: 'Created', render: (r) => formatDate(r.createdAt) },
-  ];
+  const operatingCityNames = cities.map((c) => c.name).filter(Boolean);
+  const headerCity =
+    (isCityScoped && cities.find((c) => c.geoCityId === cityId)?.name) ||
+    operatingCityNames[0] ||
+    null;
 
   const driverColumns: DataTableColumn<FleetDriver>[] = [
     {
@@ -191,7 +219,12 @@ export default function CompanyDetailPage() {
     <>
       <PageHeader
         title={company.legalName}
-        subtitle={`Company ID: ${company.id}`}
+        badge="Fleet"
+        subtitle={
+          headerCity
+            ? `${headerCity} · Company ID: ${company.id}`
+            : `Company ID: ${company.id}`
+        }
         breadcrumbs={[
           { label: 'Fleet', to: '/fleet' },
           { label: company.legalName },
@@ -223,16 +256,19 @@ export default function CompanyDetailPage() {
         </Alert>
       )}
 
-      <Tabs value={tab} onChange={(_, v) => setTab(v)} sx={{ mb: 2 }}>
-        <Tab label="Overview" />
-        <Tab label="Cities" />
-        <Tab label="Drivers" />
-        {canManageFleet && <Tab label="Wallet" />}
+      <Tabs
+        value={tabs.findIndex((t) => t.key === tab)}
+        onChange={(_, idx) => setTab(tabs[idx]?.key ?? 'overview')}
+        sx={{ mb: 2 }}
+      >
+        {tabs.map((t) => (
+          <Tab key={t.key} label={t.label} />
+        ))}
       </Tabs>
 
-      {tab === 0 && (
+      {tab === 'overview' && (
         <Grid container spacing={2}>
-          <Grid size={{ xs: 12, md: 6 }}>
+          <Grid size={{ xs: 12, md: canAssignOwner ? 6 : 12 }}>
             <Paper variant="outlined" sx={{ p: 2 }}>
               <Typography variant="subtitle2" gutterBottom>
                 Details
@@ -250,13 +286,18 @@ export default function CompanyDetailPage() {
               <Typography variant="body2">
                 Owner: {company.owner?.profile?.fullName ?? company.owner?.email ?? company.ownerUserId}
               </Typography>
+              <Typography variant="body2">
+                Operating {operatingCityNames.length === 1 ? 'city' : 'cities'}:{' '}
+                {operatingCityNames.length ? operatingCityNames.join(', ') : '—'}
+              </Typography>
               <Typography variant="body2">Created: {formatDate(company.createdAt)}</Typography>
             </Paper>
           </Grid>
+          {canAssignOwner && (
           <Grid size={{ xs: 12, md: 6 }}>
             <Paper variant="outlined" sx={{ p: 2 }}>
               <Typography variant="subtitle2" gutterBottom>
-                {canAssignOwner ? 'Admin — edit company' : 'Edit company'}
+                Admin — edit company
               </Typography>
               <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
                 <TextField
@@ -375,35 +416,17 @@ export default function CompanyDetailPage() {
               </Box>
             </Paper>
           </Grid>
+          )}
         </Grid>
       )}
 
-      {tab === 1 && (
-        <DataTable
-          columns={cityColumns}
-          rows={cities}
-          rowKey={(r) => r.id}
-          page={0}
-          rowsPerPage={Math.max(cities.length, 10)}
-          total={cities.length}
-          onPageChange={() => undefined}
-          onRowsPerPageChange={() => undefined}
-          loading={citiesLoading}
-          emptyMessage="No cities yet. Fleet owners create cities from the fleet portal."
-          onRowClick={(r) => {
-            setDriverRegionId(r.id);
-            setTab(2);
-          }}
-        />
-      )}
-
-      {tab === 2 && (
+      {tab === 'drivers' && (
         <>
           {driverRegionId && (
             <Alert
               severity="info"
               sx={{ mb: 2 }}
-              onClose={() => setDriverRegionId(null)}
+              onClose={isCityScoped ? undefined : () => setDriverRegionId(null)}
             >
               Showing drivers for{' '}
               {cities.find((c) => c.id === driverRegionId)?.name ?? 'selected city'}
@@ -424,7 +447,7 @@ export default function CompanyDetailPage() {
         </>
       )}
 
-      {canManageFleet && tab === 3 && <FleetWalletPanel fleetId={id} />}
+      {tab === 'wallet' && canViewWallet && <FleetWalletPanel fleetId={id} />}
 
       <ConfirmDialog
         open={Boolean(removeDriverId)}

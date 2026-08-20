@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { authenticate, AuthRequest, requirePasswordResetComplete } from '../middleware/auth';
-import { loadAdminPermissions, requirePermission, PERMISSION_KEYS } from '../middleware/permissions';
+import { loadAdminPermissions, requirePermission, PERMISSION_KEYS, AdminAuthRequest } from '../middleware/permissions';
 import { validate } from '../middleware/validate';
 import { sendSuccess, sendPaginated } from '../utils/response';
 import { param } from '../utils/params';
@@ -15,7 +15,7 @@ router.get(
   '/',
   requirePermission(PERMISSION_KEYS.MANAGE_FLEETS),
   validate(listFleetsSchema, 'query'),
-  async (req: AuthRequest, res, next) => {
+  async (req: AdminAuthRequest, res, next) => {
     try {
       const query = req.query as unknown as {
         page: number;
@@ -27,6 +27,7 @@ router.get(
       const { companies, total } = await fleetService.listFleetCompanies(query, {
         userId: req.user!.sub,
         roles: req.user!.platformRoles,
+        assignment: req.adminAssignment,
       });
       sendPaginated(res, companies, { page: query.page, limit: query.limit, total });
     } catch (err) {

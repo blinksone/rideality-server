@@ -7,6 +7,23 @@ export type PlatformRole =
   | 'FLEET_MANAGER'
   | 'SUPPORT_AGENT';
 
+export type AdminRole =
+  | 'SUPER_ADMIN'
+  | 'SUB_ADMIN'
+  | 'FINANCE_USER'
+  | 'PLATFORM_SUPPORT'
+  | 'GLOBAL_ADMIN'
+  | 'CONTINENT_ADMIN'
+  | 'COUNTRY_ADMIN'
+  | 'REGIONAL_ADMIN'
+  | 'CITY_ADMIN'
+  | 'FLEET_OWNER'
+  | 'REGIONAL_FLEET'
+  | 'FLEET_SUPPORT'
+  | 'FLEET_FINANCE';
+
+export type ScopeType = 'PLATFORM' | 'GLOBAL' | 'CONTINENT' | 'COUNTRY' | 'REGIONAL' | 'CITY';
+
 export type PermissionKey =
   | 'manage_users'
   | 'manage_drivers'
@@ -20,7 +37,40 @@ export type PermissionKey =
   | 'manage_wallet_adjustments'
   | 'approve_wallet_adjustments'
   | 'manage_payouts'
-  | 'export_finance_reports';
+  | 'export_finance_reports'
+  | 'ADMIN_VIEW'
+  | 'ADMIN_CREATE'
+  | 'ADMIN_UPDATE'
+  | 'ADMIN_SUSPEND'
+  | 'DRIVER_VIEW'
+  | 'DRIVER_DOCUMENT_VIEW'
+  | 'DRIVER_APPROVE'
+  | 'DRIVER_REJECT'
+  | 'DRIVER_SUSPEND'
+  | 'PASSENGER_VIEW'
+  | 'PASSENGER_SUSPEND'
+  | 'FLEET_VIEW'
+  | 'FLEET_CREATE'
+  | 'FLEET_UPDATE'
+  | 'FLEET_SUSPEND'
+  | 'FINANCE_VIEW'
+  | 'WALLET_VIEW'
+  | 'PAYOUT_VIEW'
+  | 'PAYOUT_APPROVE'
+  | 'FINANCE_REPORT_VIEW'
+  | 'TICKET_VIEW'
+  | 'TICKET_ASSIGN'
+  | 'TICKET_RESPOND'
+  | 'TICKET_ESCALATE'
+  | 'TICKET_RESOLVE'
+  | 'COUNTRY_VIEW'
+  | 'COUNTRY_CREATE'
+  | 'CITY_VIEW'
+  | 'CITY_CREATE'
+  | 'CONTINENT_VIEW'
+  | 'CONTINENT_CREATE'
+  | 'REGIONAL_VIEW'
+  | 'REGIONAL_CREATE';
 
 export type UserStatus = 'ACTIVE' | 'SUSPENDED' | 'BANNED' | 'PENDING';
 
@@ -98,6 +148,13 @@ export interface PortalUser {
     avatarUrl?: string | null;
   };
   fleetMemberships?: FleetMembershipSummary[];
+  adminRole?: AdminRole | null;
+  scopeType?: ScopeType | null;
+  continentId?: string | null;
+  countryId?: string | null;
+  regionalId?: string | null;
+  cityId?: string | null;
+  canInvite?: AdminRole[];
 }
 
 export type FleetAccessTier = 'owner' | 'regional' | 'support';
@@ -178,6 +235,33 @@ export interface UserDetail {
   activeMode: string;
   createdAt: string;
   temporaryPassword?: string;
+  region?: { id: string; code: string; name: string } | null;
+  adminRole?: AdminRole | null;
+  scopeType?: ScopeType | null;
+  adminAssignment?: {
+    role: AdminRole;
+    scopeType: ScopeType;
+    continent?: { id: string; code: string; name: string } | null;
+    country?: { id: string; code: string; name: string } | null;
+    province?: { id: string; name: string; code: string | null } | null;
+    city?: { id: string; name: string } | null;
+    canInvite: AdminRole[];
+    invitedBy?: {
+      userId: string;
+      role: AdminRole;
+      fullName: string | null;
+      email: string | null;
+    } | null;
+    team: Array<{
+      userId: string;
+      role: AdminRole;
+      fullName: string | null;
+      email: string | null;
+      phone: string;
+      scopeLabel: string;
+      createdAt: string;
+    }>;
+  } | null;
   profile?: {
     fullName?: string | null;
     avatarUrl?: string | null;
@@ -193,6 +277,7 @@ export interface UserDetail {
   documents: VerificationDocument[];
   adminNotes: AdminNote[];
   wallet?: { balance: number; currency: string } | null;
+  fleetMemberships?: FleetMembershipSummary[];
   abuseRecords?: unknown[];
 }
 
@@ -342,8 +427,30 @@ export interface Region {
   name: string;
   currency: string;
   phonePrefix: string;
+  continentId?: string | null;
   isActive?: boolean;
   createdAt?: string;
+}
+
+export interface Continent {
+  id: string;
+  code: string;
+  name: string;
+}
+
+export interface Province {
+  id: string;
+  name: string;
+  code: string | null;
+  countryId: string;
+}
+
+export interface GeoCity {
+  id: string;
+  name: string;
+  provinceId: string | null;
+  province?: { id: string; name: string; countryId?: string } | null;
+  fleetCompany?: { id: string; legalName: string; regionId: string };
 }
 
 export interface CreateRegionPayload {

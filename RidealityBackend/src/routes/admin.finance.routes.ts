@@ -1,12 +1,13 @@
 import { Router } from 'express';
 import { authenticate, AuthRequest, requirePasswordResetComplete } from '../middleware/auth';
-import { loadAdminPermissions, requirePermission, PERMISSION_KEYS } from '../middleware/permissions';
+import { loadAdminPermissions, requirePermission, PERMISSION_KEYS, AdminAuthRequest } from '../middleware/permissions';
 import { validate } from '../middleware/validate';
 import { sendPaginated, sendSuccess } from '../utils/response';
 import { param } from '../utils/params';
 import { canAccessPortal } from '../services/portal.service';
 import { ForbiddenError } from '../utils/errors';
 import * as financeService from '../services/finance.service';
+import type { AdminAssignmentRecord } from '../services/admin-scope.service';
 import {
   bulkWalletStatusSchema,
   createAdjustmentSchema,
@@ -26,6 +27,24 @@ import {
 } from '../validators/finance.validator';
 
 const router = Router();
+
+function applyWalletListScope(
+  assignment: AdminAssignmentRecord | null | undefined,
+  query: { regionId?: string; continentId?: string },
+) {
+  if (assignment?.scopeType === 'CITY') {
+    throw new ForbiddenError('Forbidden: outside your assigned scope');
+  }
+  if (assignment?.scopeType === 'COUNTRY' && assignment.countryId) {
+    query.regionId = assignment.countryId;
+  }
+  if (assignment?.scopeType === 'REGIONAL' && assignment.countryId) {
+    query.regionId = assignment.countryId;
+  }
+  if (assignment?.scopeType === 'CONTINENT' && assignment.continentId) {
+    query.continentId = assignment.continentId;
+  }
+}
 
 function requirePortalAccess(req: AuthRequest, _res: unknown, next: (err?: unknown) => void) {
   const roles = req.user?.platformRoles ?? [];
@@ -55,13 +74,14 @@ router.get(
   '/wallets',
   requirePermission(PERMISSION_KEYS.VIEW_FINANCE),
   validate(listWalletsSchema, 'query'),
-  async (req: AuthRequest, res, next) => {
+  async (req: AdminAuthRequest, res, next) => {
     try {
       const query = req.query as unknown as {
         page: number;
         limit: number;
         ownerType?: 'user' | 'fleet' | 'platform';
         regionId?: string;
+        continentId?: string;
         status?: 'active' | 'frozen' | 'closed';
         search?: string;
         currency?: string;
@@ -71,6 +91,7 @@ router.get(
         updatedTo?: string;
         ids?: string;
       };
+      applyWalletListScope(req.adminAssignment, query);
       const { wallets, total } = await financeService.listWallets(query);
       sendPaginated(res, wallets, { page: query.page, limit: query.limit, total });
     } catch (err) {
@@ -83,9 +104,10 @@ router.get(
   '/wallets/export',
   requirePermission(PERMISSION_KEYS.EXPORT_FINANCE_REPORTS),
   validate(exportWalletsSchema, 'query'),
-  async (req, res, next) => {
+  async (req: AdminAuthRequest, res, next) => {
     try {
       const query = req.query as unknown as Parameters<typeof financeService.exportWalletsCsv>[0];
+      applyWalletListScope(req.adminAssignment, query);
       const csv = await financeService.exportWalletsCsv(query);
       res.setHeader('Content-Type', 'text/csv; charset=utf-8');
       res.setHeader('Content-Disposition', 'attachment; filename="wallets-export.csv"');

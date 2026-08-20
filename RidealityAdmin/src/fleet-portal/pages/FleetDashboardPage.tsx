@@ -6,7 +6,7 @@ import { fleetPath } from '@/fleet-portal/fleetNavConfig';
 import FleetLiveMap from '@/fleet-portal/components/FleetLiveMap';
 import FleetMetricCard from '@/fleet-portal/components/FleetMetricCard';
 import FleetPageHero from '@/fleet-portal/components/FleetPageHero';
-import { useFleetAccessTier } from '@/hooks/useFleetPortalMode';
+import { useActiveFleetMembership, useFleetAccessTier } from '@/hooks/useFleetPortalMode';
 import { formatDate, formatLabel } from '@/utils/format';
 import AddIcon from '@mui/icons-material/Add';
 import PaidIcon from '@mui/icons-material/Paid';
@@ -20,18 +20,20 @@ import PendingActionsIcon from '@mui/icons-material/PendingActions';
 
 export default function FleetDashboardPage() {
   const { companyId = '' } = useParams();
+  const membership = useActiveFleetMembership(companyId);
   const tier = useFleetAccessTier(companyId);
   const isOwner = tier === 'owner';
+  const canAccessCompany = Boolean(membership);
   const { data, isLoading } = useQuery({
     queryKey: ['fleet-dashboard', companyId],
     queryFn: () => getFleetDashboard(companyId),
-    enabled: Boolean(companyId),
+    enabled: canAccessCompany,
   });
 
   const { data: mapData } = useQuery({
     queryKey: ['fleet-map', companyId],
     queryFn: () => getFleetMapData(companyId),
-    enabled: Boolean(companyId) && !isOwner,
+    enabled: canAccessCompany && !isOwner,
     refetchInterval: isOwner ? false : 30000,
   });
 

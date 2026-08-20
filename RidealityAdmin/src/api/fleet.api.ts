@@ -302,6 +302,8 @@ export interface FleetRegionRow {
   name: string;
   fleetCompanyId: string;
   createdAt: string;
+  provinceId?: string | null;
+  geoCityId?: string | null;
   supportCount?: number;
   driverCount: number;
 }
@@ -636,6 +638,12 @@ export interface FleetCityProfile {
     phone: string;
     email: string | null;
   }>;
+  supportStaff: Array<{
+    userId: string;
+    fullName: string | null;
+    phone: string;
+    email: string | null;
+  }>;
   stats: {
     drivers: number;
     online: number;
@@ -793,6 +801,18 @@ export async function reviewFleetDocument(
     `/fleet/companies/${companyId}/documents/${documentId}`,
     payload,
   );
+  return data.data;
+}
+
+export async function approveFleetDocument(documentId: string): Promise<unknown> {
+  const { data } = await apiClient.post<ApiSuccess<unknown>>(`/fleet/documents/${documentId}/approve`);
+  return data.data;
+}
+
+export async function rejectFleetDocument(documentId: string, rejectionReason: string): Promise<unknown> {
+  const { data } = await apiClient.post<ApiSuccess<unknown>>(`/fleet/documents/${documentId}/reject`, {
+    rejectionReason,
+  });
   return data.data;
 }
 

@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import { PlatformRole } from '@prisma/client';
 import { authenticate, requireAdmin, AuthRequest, requirePasswordResetComplete, requireRoles } from '../middleware/auth';
-import { loadAdminPermissions, requirePermission, PERMISSION_KEYS } from '../middleware/permissions';
+import { loadAdminPermissions, requirePermission, requirePermissionInScope, PERMISSION_KEYS, AdminAuthRequest } from '../middleware/permissions';
 import { validate } from '../middleware/validate';
 import { sendSuccess, sendPaginated } from '../utils/response';
 import { param } from '../utils/params';
@@ -9,6 +9,7 @@ import * as adminService from '../services/admin.service';
 import * as permissionService from '../services/permission.service';
 import * as passengerService from '../services/passenger.service';
 import * as ratingService from '../services/rating.service';
+import { assertTargetUserInScope } from '../services/admin-scope.service';
 import {
   listUsersSchema,
   updateStatusSchema,
@@ -36,9 +37,9 @@ router.use(authenticate, requireAdmin(), loadAdminPermissions, requirePasswordRe
 
 router.post(
   '/',
-  requirePermission(PERMISSION_KEYS.MANAGE_USERS),
+  requirePermissionInScope(PERMISSION_KEYS.ADMIN_CREATE),
   validate(createUserSchema),
-  async (req: AuthRequest, res, next) => {
+  async (req: AdminAuthRequest, res, next) => {
     try {
       const data = await adminService.createAdminUser(
         req.user!.sub,
@@ -53,7 +54,7 @@ router.post(
   },
 );
 
-router.get('/', validate(listUsersSchema, 'query'), requirePermission(PERMISSION_KEYS.MANAGE_USERS), async (req: AuthRequest, res, next) => {
+router.get('/', validate(listUsersSchema, 'query'), requirePermission(PERMISSION_KEYS.MANAGE_USERS), async (req: AdminAuthRequest, res, next) => {
   try {
     const query = req.query as unknown as {
       page: number;
@@ -64,7 +65,10 @@ router.get('/', validate(listUsersSchema, 'query'), requirePermission(PERMISSION
       search?: string;
       driverStatus?: string;
     };
-    const { users, total } = await adminService.listUsers(query as Parameters<typeof adminService.listUsers>[0]);
+    const { users, total } = await adminService.listUsers(
+      query as Parameters<typeof adminService.listUsers>[0],
+      req.adminAssignment,
+    );
     sendPaginated(res, users, { page: query.page, limit: query.limit, total });
   } catch (err) {
     next(err);
@@ -212,9 +216,10 @@ router.patch('/:id/status', validate(updateStatusSchema), requirePermission(PERM
 router.patch(
   '/:id/driver/review',
   validate(driverReviewSchema),
-  requirePermission(PERMISSION_KEYS.MANAGE_DRIVERS),
-  async (req: AuthRequest, res, next) => {
+  requirePermissionInScope(PERMISSION_KEYS.DRIVER_APPROVE),
+  async (req: AdminAuthRequest, res, next) => {
     try {
+      await assertTargetUserInScope(req.adminAssignment ?? null, param(req.params.id));
       const data = await adminService.reviewDriver(
         req.user!.sub,
         param(req.params.id),
@@ -232,9 +237,10 @@ router.patch(
 router.patch(
   '/:id/documents/:docId',
   validate(documentReviewSchema),
-  requirePermission(PERMISSION_KEYS.MANAGE_DOCUMENTS),
-  async (req: AuthRequest, res, next) => {
+  requirePermissionInScope(PERMISSION_KEYS.DRIVER_APPROVE),
+  async (req: AdminAuthRequest, res, next) => {
     try {
+      await assertTargetUserInScope(req.adminAssignment ?? null, param(req.params.id));
       const data = await adminService.reviewDocument(
         req.user!.sub,
         param(req.params.id),
@@ -278,7 +284,7 @@ router.get(
   '/:id/audit-log',
   validate(auditLogSchema, 'query'),
   requirePermission(PERMISSION_KEYS.VIEW_REPORTS),
-  async (req: AuthRequest, res, next) => {
+  async (req: AdminAuthRequest, res, next) => {
     try {
       const query = req.query as unknown as { page: number; limit: number };
       const { logs, total } = await adminService.getAuditLog(
@@ -296,7 +302,7 @@ router.get(
 router.get(
   '/:id/passenger-summary',
   requirePermission(PERMISSION_KEYS.MANAGE_USERS),
-  async (req: AuthRequest, res, next) => {
+  async (req: AdminAuthRequest, res, next) => {
     try {
       const data = await passengerService.getPassengerSummaryAdmin(param(req.params.id));
       sendSuccess(res, data);
@@ -310,7 +316,7 @@ router.get(
   '/:id/rides',
   validate(passengerRidesQuerySchema, 'query'),
   requirePermission(PERMISSION_KEYS.MANAGE_USERS),
-  async (req: AuthRequest, res, next) => {
+  async (req: AdminAuthRequest, res, next) => {
     try {
       const query = req.query as unknown as Parameters<typeof passengerService.listPassengerRidesAdmin>[1];
       const { rides, total } = await passengerService.listPassengerRidesAdmin(
@@ -328,7 +334,7 @@ router.get(
   '/:id/wallet',
   validate(auditLogSchema, 'query'),
   requirePermission(PERMISSION_KEYS.VIEW_FINANCE),
-  async (req: AuthRequest, res, next) => {
+  async (req: AdminAuthRequest, res, next) => {
     try {
       const query = req.query as unknown as { page: number; limit: number };
       const data = await passengerService.getPassengerWalletAdmin(param(req.params.id), query);
@@ -343,7 +349,7 @@ router.get(
   '/:id/ratings',
   validate(passengerRatingsQuerySchema, 'query'),
   requirePermission(PERMISSION_KEYS.VIEW_REPORTS),
-  async (req: AuthRequest, res, next) => {
+  async (req: AdminAuthRequest, res, next) => {
     try {
       const query = req.query as unknown as Parameters<typeof ratingService.listUserRatingsAdmin>[1];
       const data = await ratingService.listUserRatingsAdmin(param(req.params.id), query);
@@ -354,8 +360,9 @@ router.get(
   },
 );
 
-router.get('/:id', requirePermission(PERMISSION_KEYS.MANAGE_USERS), async (req: AuthRequest, res, next) => {
+router.get('/:id', requirePermission(PERMISSION_KEYS.ADMIN_VIEW), async (req: AdminAuthRequest, res, next) => {
   try {
+    await assertTargetUserInScope(req.adminAssignment ?? null, param(req.params.id));
     const data = await adminService.getAdminUserDetail(param(req.params.id));
     sendSuccess(res, data);
   } catch (err) {
@@ -363,7 +370,7 @@ router.get('/:id', requirePermission(PERMISSION_KEYS.MANAGE_USERS), async (req: 
   }
 });
 
-router.post('/:id/reset-password', requireSuperAdmin, async (req: AuthRequest, res, next) => {
+router.post('/:id/reset-password', requireSuperAdmin, async (req: AdminAuthRequest, res, next) => {
   try {
     const data = await adminService.resetAdminUserPassword(
       req.user!.sub,

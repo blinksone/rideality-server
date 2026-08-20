@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import {
   AppBar,
   Avatar,
@@ -24,7 +24,7 @@ import AutoAwesomeIcon from '@mui/icons-material/AutoAwesome';
 import { Link as RouterLink, Outlet, useLocation, useNavigate, useParams } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { logout as logoutApi } from '@/api/auth.api';
-import { getFleetDashboard, listFleetNotifications } from '@/api/fleet.api';
+import { getFleetCityProfile, getFleetDashboard, listFleetNotifications } from '@/api/fleet.api';
 import { useAuth } from '@/hooks/useAuth';
 import { useAppDispatch, useAppSelector } from '@/store/hooks';
 import { logout as logoutAction } from '@/store/authSlice';
@@ -36,6 +36,7 @@ import {
   FLEET_NAV_ITEMS,
   TIER_LABEL,
   fleetLandingSegment,
+  fleetNavItemPath,
   fleetPath,
   getFleetNavSections,
 } from '@/fleet-portal/fleetNavConfig';
@@ -59,14 +60,45 @@ function FleetPortalShell() {
   const [mobileOpen, setMobileOpen] = useState(false);
   const [logoutOpen, setLogoutOpen] = useState(false);
 
+  const memberships = user?.fleetMemberships ?? [];
   const activeId = routeCompanyId ?? companyId ?? '';
+  const canAccessCompany = Boolean(
+    activeId && memberships.some((m) => m.companyId === activeId),
+  );
   const tier = useFleetAccessTier(activeId || undefined);
   const membership = useActiveFleetMembership(activeId || undefined);
   const navSections = getFleetNavSections(tier);
+
+  useEffect(() => {
+    if (!user || !routeCompanyId) return;
+    const allowed = user.fleetMemberships ?? [];
+    if (!allowed.length) return;
+
+    const match = allowed.find((m) => m.companyId === routeCompanyId);
+    if (!match) {
+      const home = allowed[0];
+      const next =
+        location.pathname.includes('/regions/') && home.fleetRegionId
+          ? `/portal/${home.companyId}/regions/${home.fleetRegionId}`
+          : fleetPath(home.companyId, fleetLandingSegment(home.role));
+      navigate(next, { replace: true });
+      return;
+    }
+
+    if (match.role === 'owner' || !match.fleetRegionId) return;
+    const parts = location.pathname.split('/').filter(Boolean);
+    const regionIdx = parts.indexOf('regions');
+    const urlRegionId = regionIdx >= 0 ? parts[regionIdx + 1] : undefined;
+    if (urlRegionId && urlRegionId !== match.fleetRegionId) {
+      navigate(`/portal/${match.companyId}/regions/${match.fleetRegionId}`, { replace: true });
+    }
+  }, [user, routeCompanyId, location.pathname, navigate]);
+
   const pathParts = location.pathname.split('/').filter(Boolean);
   const pathSegment = pathParts[pathParts.length - 1] ?? 'dashboard';
   const isCityProfile = pathParts.includes('regions') && pathSegment !== 'regions';
-  const pageTitle = isCityProfile ? 'City profile' : getBreadcrumb(pathSegment);
+  const ticketTab = new URLSearchParams(location.search).get('tab') === 'tickets';
+  const pageTitle = ticketTab && isCityProfile ? 'Tickets' : isCityProfile ? 'City profile' : getBreadcrumb(pathSegment);
   const cityName = membership?.fleetRegionName;
   const tierLabel = tier
     ? cityName && tier !== 'owner'
@@ -77,7 +109,13 @@ function FleetPortalShell() {
   const { data: dash } = useQuery({
     queryKey: ['fleet-dashboard', activeId],
     queryFn: () => getFleetDashboard(activeId),
-    enabled: Boolean(activeId),
+    enabled: canAccessCompany,
+  });
+
+  const { data: cityDesk } = useQuery({
+    queryKey: ['fleet-city-profile', activeId, membership?.fleetRegionId],
+    queryFn: () => getFleetCityProfile(activeId, membership!.fleetRegionId!),
+    enabled: canAccessCompany && Boolean(membership?.fleetRegionId),
   });
 
   const { data: notifMeta } = useQuery({
@@ -86,7 +124,7 @@ function FleetPortalShell() {
       const res = await listFleetNotifications(activeId, { page: 1, limit: 1, unreadOnly: true });
       return res.data;
     },
-    enabled: Boolean(activeId),
+    enabled: canAccessCompany,
   });
 
   const logoutMutation = useMutation({
@@ -177,12 +215,19 @@ function FleetPortalShell() {
               {section.title}
             </Typography>
             {section.items.map((item) => {
-              const path = activeId ? fleetPath(activeId, item.segment) : '#';
-              const selected = location.pathname.startsWith(path);
+              const path = activeId ? fleetNavItemPath(activeId, item.segment, membership) : '#';
+              const pathOnly = path.split('?')[0];
+              const selected =
+                item.segment === 'tickets'
+                  ? isCityProfile && ticketTab
+                  : item.segment === 'city-desk'
+                    ? isCityProfile && !ticketTab
+                    : location.pathname.startsWith(pathOnly);
               let badge = 0;
               if (item.badge === 'pendingInvites') badge = dash?.pendingInvites ?? 0;
               if (item.badge === 'pendingApprovals') badge = dash?.pendingApprovals ?? 0;
               if (item.badge === 'unreadNotifications') badge = notifMeta?.unreadCount ?? 0;
+              if (item.badge === 'pendingTickets') badge = cityDesk?.stats.pendingComplaints ?? 0;
               const Icon = item.icon;
               return (
                 <ListItemButton
@@ -283,7 +328,7 @@ function FleetPortalShell() {
           {companies.length > 0 && (
             <Select
               size="small"
-              value={activeId || ''}
+              value={companies.some((c) => c.id === activeId) ? activeId : ''}
               onChange={(e) => navigate(fleetPath(e.target.value, fleetLandingSegment(tier)))}
               sx={{ minWidth: 200, ml: { md: 3 } }}
               displayEmpty

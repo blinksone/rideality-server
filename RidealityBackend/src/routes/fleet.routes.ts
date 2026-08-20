@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { z } from 'zod';
 import { authenticate, AuthRequest, requirePasswordResetComplete } from '../middleware/auth';
+import { loadAdminPermissions, requirePermissionInScope, PERMISSION_KEYS, AdminAuthRequest } from '../middleware/permissions';
 import { validate } from '../middleware/validate';
 import { sendSuccess } from '../utils/response';
 import { param } from '../utils/params';
@@ -300,6 +301,50 @@ router.patch(
 );
 
 router.post(
+  '/documents/:id/approve',
+  authenticate,
+  requirePasswordResetComplete,
+  loadAdminPermissions,
+  requirePermissionInScope(PERMISSION_KEYS.DRIVER_APPROVE),
+  async (req: AdminAuthRequest, res, next) => {
+    try {
+      const data = await fleetHierarchy.reviewFleetDocumentById(
+        req.user!.sub,
+        param(req.params.id),
+        { status: 'approved' },
+        req.adminAssignment?.cityId,
+      );
+      sendSuccess(res, data);
+    } catch (err) {
+      next(err);
+    }
+  },
+);
+
+router.post(
+  '/documents/:id/reject',
+  authenticate,
+  requirePasswordResetComplete,
+  loadAdminPermissions,
+  requirePermissionInScope(PERMISSION_KEYS.DRIVER_REJECT),
+  async (req: AdminAuthRequest, res, next) => {
+    try {
+      const reason =
+        typeof req.body?.rejectionReason === 'string' ? req.body.rejectionReason : undefined;
+      const data = await fleetHierarchy.reviewFleetDocumentById(
+        req.user!.sub,
+        param(req.params.id),
+        { status: 'rejected', rejectionReason: reason },
+        req.adminAssignment?.cityId,
+      );
+      sendSuccess(res, data);
+    } catch (err) {
+      next(err);
+    }
+  },
+);
+
+router.post(
   '/companies/:id/regions',
   validate(createFleetRegionSchema),
   async (req: AuthRequest, res, next) => {
@@ -399,7 +444,7 @@ router.post(
       const data = await fleetHierarchy.inviteFleetSupport(
         param(req.params.id),
         req.user!.sub,
-        req.body,
+        { ...req.body, fleetRegionId: param(req.params.regionId) },
       );
       sendSuccess(res, data, 201);
     } catch (err) {

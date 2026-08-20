@@ -28,14 +28,23 @@ import { useEffect, useMemo, useState } from 'react';
 import { Link as RouterLink, Outlet, useLocation, useNavigate } from 'react-router-dom';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { logout as logoutApi } from '@/api/auth.api';
-import type { PermissionKey } from '@/api/types';
+import type { AdminRole, PermissionKey } from '@/api/types';
 import { useAuth } from '@/hooks/useAuth';
 import { usePermissions } from '@/hooks/usePermissions';
+import { useAdminScope } from '@/hooks/useAdminScope';
 import { useAppDispatch, useAppSelector } from '@/store/hooks';
 import { logout as logoutAction } from '@/store/authSlice';
 import { toggleMode } from '@/store/themeSlice';
-import { NAV_GROUPS, getNavLabelForPath, type NavGroup, type NavItem } from '@/routes/navConfig';
+import {
+  NAV_GROUPS,
+  getNavLabelForPath,
+  navGroupLabel,
+  navItemLabel,
+  type NavGroup,
+  type NavItem,
+} from '@/routes/navConfig';
 import { hasPermission } from '@/utils/permissions';
+import { formatAdminRole } from '@/utils/format';
 import ConfirmDialog from '@/components/ConfirmDialog';
 
 const DRAWER_WIDTH = 256;
@@ -83,12 +92,17 @@ function filterVisibleNavGroups(
   groups: NavGroup[],
   permissions: PermissionKey[],
   isSuperAdmin: boolean,
+  adminRole: AdminRole | null,
 ): NavGroup[] {
   return groups
     .map((group) => ({
       ...group,
+      label: navGroupLabel(group, adminRole),
       items: group.items.filter((item) => {
         if (item.superAdminOnly && !isSuperAdmin) return false;
+        if (item.visibleTo?.length && !isSuperAdmin) {
+          if (!adminRole || !item.visibleTo.includes(adminRole)) return false;
+        }
         if (!item.permission) return true;
         const perms = Array.isArray(item.permission) ? item.permission : [item.permission];
         if (item.anyPermission) {
@@ -105,6 +119,7 @@ export default function AdminLayout() {
   const dispatch = useAppDispatch();
   const { user } = useAuth();
   const { permissions, isSuperAdmin } = usePermissions();
+  const { role } = useAdminScope();
   const location = useLocation();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
@@ -115,11 +130,11 @@ export default function AdminLayout() {
   const [collapsedGroups, setCollapsedGroups] = useState<Record<string, boolean>>(loadCollapsedGroups);
 
   const drawerWidth = sidebarCollapsed ? MINI_DRAWER_WIDTH : DRAWER_WIDTH;
-  const pageTitle = getNavLabelForPath(location.pathname);
+  const pageTitle = getNavLabelForPath(location.pathname, role);
 
   const visibleNavGroups = useMemo(
-    () => filterVisibleNavGroups(NAV_GROUPS, permissions, isSuperAdmin),
-    [permissions, isSuperAdmin],
+    () => filterVisibleNavGroups(NAV_GROUPS, permissions, isSuperAdmin, role),
+    [permissions, isSuperAdmin, role],
   );
 
   useEffect(() => {
@@ -175,6 +190,7 @@ export default function AdminLayout() {
   const renderNavItem = (item: NavItem) => {
     const Icon = item.icon;
     const selected = isNavItemActive(item, location.pathname, visibleNavGroups.flatMap((g) => g.items));
+    const label = navItemLabel(item, role);
     const button = (
       <ListItemButton
         key={item.path}
@@ -203,7 +219,7 @@ export default function AdminLayout() {
         </ListItemIcon>
         {!sidebarCollapsed && (
           <ListItemText
-            primary={item.label}
+            primary={label}
             slotProps={{ primary: { sx: { fontSize: 13, fontWeight: selected ? 600 : 500 }, noWrap: true } }}
           />
         )}
@@ -212,7 +228,7 @@ export default function AdminLayout() {
 
     if (sidebarCollapsed) {
       return (
-        <Tooltip key={item.path} title={item.label} placement="right">
+        <Tooltip key={item.path} title={label} placement="right">
           {button}
         </Tooltip>
       );
@@ -277,7 +293,7 @@ export default function AdminLayout() {
                   mt: -0.25,
                 }}
               >
-                Platform Admin
+                {role ? formatAdminRole(role) : 'Platform Admin'}
               </Typography>
             </Box>
           )}
@@ -354,7 +370,7 @@ export default function AdminLayout() {
       <Box sx={{ p: sidebarCollapsed ? 1 : 2, borderTop: 1, borderColor: 'divider', bgcolor: 'action.hover' }}>
         {sidebarCollapsed ? (
           <Tooltip
-            title={`${user?.profile?.fullName ?? user?.email ?? 'Admin'} · ${user?.platformRoles?.join(', ') ?? ''}`}
+            title={`${user?.profile?.fullName ?? user?.email ?? 'Admin'} · ${formatAdminRole(user?.adminRole ?? user?.platformRoles?.[0] ?? 'Admin')}`}
             placement="right"
           >
             <Avatar sx={{ mx: 'auto', width: 40, height: 40, borderRadius: 3, bgcolor: 'primary.main', fontSize: 14 }}>
@@ -395,7 +411,7 @@ export default function AdminLayout() {
                 {user?.profile?.fullName ?? user?.email ?? 'Admin'}
               </Typography>
               <Typography variant="caption" color="text.secondary" noWrap sx={{ fontFamily: 'monospace', fontSize: 10 }}>
-                {user?.platformRoles?.join(', ') ?? 'Platform'}
+                {formatAdminRole(user?.adminRole ?? user?.platformRoles?.[0] ?? 'Platform')}
               </Typography>
             </Box>
           </Box>
@@ -459,7 +475,7 @@ export default function AdminLayout() {
               </Typography>
             </Box>
             <Typography variant="caption" color="text.secondary" sx={{ fontFamily: 'monospace', fontSize: 10 }}>
-              {user?.platformRoles?.[0] ?? 'Admin'}
+              {formatAdminRole(user?.adminRole ?? user?.platformRoles?.[0] ?? 'Admin')}
             </Typography>
           </Box>
           <Tooltip title="Toggle theme">

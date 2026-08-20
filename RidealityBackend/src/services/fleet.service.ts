@@ -5,6 +5,7 @@ import {
   FleetMemberRole,
   FleetMemberStatus,
   PlatformRole,
+  Prisma,
   RideStatus,
   UserStatus,
   VehicleOperationalStatus,
@@ -23,6 +24,7 @@ import {
   normalizeMemberRole,
   notStaffDriverUserFilter,
 } from './fleet-access';
+import { upsertAdminAssignment, scopedFleetCompanyWhere, type AdminAssignmentRecord } from './admin-scope.service';
 
 export { assertFleetAccess, assertFleetDriverOps, assertFleetOwner, normalizeMemberRole } from './fleet-access';
 export type { FleetAccessContext, FleetAccessTier } from './fleet-access';
@@ -60,12 +62,27 @@ async function assertUniqueLegalNameForOwner(
 
 export async function createFleetCompany(
   ownerUserId: string,
-  data: { legalName: string; taxId?: string; regionId: string },
+  data: {
+    legalName: string;
+    taxId?: string;
+    regionId: string;
+    continentId?: string | null;
+    regionalId?: string | null;
+    cityId?: string | null;
+    invitedByUserId?: string | null;
+  },
 ) {
   await assertActiveRegion(data.regionId);
   const legalName = data.legalName.trim();
   const taxId = normalizeTaxId(data.taxId);
   await assertUniqueLegalNameForOwner(legalName, ownerUserId);
+
+  const geoCity = data.cityId
+    ? await prisma.city.findUnique({
+        where: { id: data.cityId },
+        select: { id: true, name: true, provinceId: true },
+      })
+    : null;
 
   const company = await prisma.$transaction(async (tx) => {
     const created = await tx.fleetCompany.create({
@@ -86,6 +103,17 @@ export async function createFleetCompany(
       },
     });
 
+    if (geoCity) {
+      await tx.fleetRegion.create({
+        data: {
+          fleetCompanyId: created.id,
+          name: geoCity.name,
+          provinceId: geoCity.provinceId,
+          geoCityId: geoCity.id,
+        },
+      });
+    }
+
     await tx.userPlatformRole.upsert({
       where: { userId_role: { userId: ownerUserId, role: PlatformRole.FLEET_OWNER } },
       create: { userId: ownerUserId, role: PlatformRole.FLEET_OWNER },
@@ -98,6 +126,15 @@ export async function createFleetCompany(
   const region = await prisma.region.findUniqueOrThrow({ where: { id: data.regionId } });
   // Phase 2: fleet wallet created only via finance ownership layer.
   await ensureFleetWallet(company.id, company.regionId, region.currency);
+  await upsertAdminAssignment({
+    userId: ownerUserId,
+    role: 'FLEET_OWNER',
+    continentId: data.continentId,
+    countryId: data.regionId,
+    regionalId: data.regionalId ?? geoCity?.provinceId ?? null,
+    cityId: data.cityId ?? null,
+    invitedByUserId: data.invitedByUserId,
+  });
 
   return company;
 }
@@ -110,22 +147,16 @@ export async function listFleetCompanies(
     status?: FleetCompanyStatus;
     regionId?: string;
   },
-  requester?: { userId: string; roles: PlatformRole[] },
+  requester?: { userId: string; roles: PlatformRole[]; assignment?: AdminAssignmentRecord | null },
 ) {
   const isPlatformAdmin =
     requester?.roles.includes(PlatformRole.SUPER_ADMIN) ||
     requester?.roles.includes(PlatformRole.ADMIN) ||
     requester?.roles.includes(PlatformRole.SUB_ADMIN);
 
-  const where: {
-    legalName?: { contains: string; mode: 'insensitive' };
-    status?: FleetCompanyStatus;
-    regionId?: string;
-    OR?: Array<
-      | { ownerUserId: string }
-      | { memberships: { some: { userId: string; status: FleetMemberStatus } } }
-    >;
-  } = {};
+  const where: Prisma.FleetCompanyWhereInput = {
+    ...scopedFleetCompanyWhere(requester?.assignment ?? null),
+  };
 
   if (query.search) {
     where.legalName = { contains: query.search, mode: 'insensitive' };
@@ -133,7 +164,7 @@ export async function listFleetCompanies(
   if (query.status) {
     where.status = query.status;
   }
-  if (query.regionId) {
+  if (query.regionId && !where.regionId) {
     where.regionId = query.regionId;
   }
   if (requester && !isPlatformAdmin) {
@@ -707,6 +738,17 @@ export async function acceptFleetInvite(token: string, userId: string) {
       }
     }
   });
+
+  if (invite.memberRole) {
+    const tier = normalizeMemberRole(invite.memberRole);
+    await upsertAdminAssignment({
+      userId,
+      role: tier === 'regional' ? 'REGIONAL_FLEET' : 'FLEET_SUPPORT',
+      countryId: invite.fleetCompany.regionId,
+      cityId: invite.fleetRegionId,
+      invitedByUserId: undefined,
+    });
+  }
 
   return {
     fleetCompanyId: invite.fleetCompanyId,

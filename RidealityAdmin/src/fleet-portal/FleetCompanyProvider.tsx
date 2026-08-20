@@ -1,19 +1,42 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
-import { useQuery } from '@tanstack/react-query';
-import { listAdminFleets } from '@/api/fleet.api';
-import type { FleetCompany } from '@/api/types';
+import { useAuth } from '@/hooks/useAuth';
+import type { FleetMembershipSummary } from '@/api/types';
 
 const STORAGE_KEY = 'rideality_active_fleet_id';
 
+export interface FleetPortalCompany {
+  id: string;
+  legalName: string;
+  status: string;
+}
+
 interface FleetCompanyContextValue {
-  companies: FleetCompany[];
-  company: FleetCompany | null;
+  companies: FleetPortalCompany[];
+  company: FleetPortalCompany | null;
   companyId: string | null;
   setCompanyId: (id: string) => void;
   loading: boolean;
+  memberships: FleetMembershipSummary[];
 }
 
+const EMPTY_MEMBERSHIPS: FleetMembershipSummary[] = [];
+
 const FleetCompanyContext = createContext<FleetCompanyContextValue | null>(null);
+
+function companiesFromMemberships(memberships: FleetMembershipSummary[]): FleetPortalCompany[] {
+  const seen = new Set<string>();
+  const companies: FleetPortalCompany[] = [];
+  for (const row of memberships) {
+    if (seen.has(row.companyId)) continue;
+    seen.add(row.companyId);
+    companies.push({
+      id: row.companyId,
+      legalName: row.companyName,
+      status: row.companyStatus,
+    });
+  }
+  return companies;
+}
 
 export function FleetCompanyProvider({
   companyId,
@@ -22,28 +45,34 @@ export function FleetCompanyProvider({
   companyId?: string;
   children: React.ReactNode;
 }) {
-  const [activeId, setActiveId] = useState<string | null>(companyId ?? localStorage.getItem(STORAGE_KEY));
+  const { user } = useAuth();
+  const memberships = user?.fleetMemberships ?? EMPTY_MEMBERSHIPS;
+  const companies = useMemo(() => companiesFromMemberships(memberships), [memberships]);
+  const allowedIds = useMemo(() => new Set(companies.map((c) => c.id)), [companies]);
 
-  const { data, isLoading } = useQuery({
-    queryKey: ['fleet-portal-companies'],
-    queryFn: () => listAdminFleets({ page: 1, limit: 50 }),
+  const [activeId, setActiveId] = useState<string | null>(() => {
+    const stored = localStorage.getItem(STORAGE_KEY);
+    if (companyId) return companyId;
+    return stored;
   });
 
-  const companies = data?.data ?? [];
-
   useEffect(() => {
-    if (companyId) {
+    if (!user) return;
+    if (companyId && allowedIds.has(companyId)) {
       setActiveId(companyId);
       localStorage.setItem(STORAGE_KEY, companyId);
+      return;
     }
-  }, [companyId]);
-
-  useEffect(() => {
-    if (!activeId && companies.length === 1) {
-      setActiveId(companies[0].id);
-      localStorage.setItem(STORAGE_KEY, companies[0].id);
-    }
-  }, [activeId, companies]);
+    setActiveId((current) => {
+      if (current && allowedIds.has(current)) return current;
+      const stored = localStorage.getItem(STORAGE_KEY);
+      if (stored && allowedIds.has(stored)) return stored;
+      const next = companies[0]?.id ?? null;
+      if (next) localStorage.setItem(STORAGE_KEY, next);
+      else localStorage.removeItem(STORAGE_KEY);
+      return next;
+    });
+  }, [user, companyId, allowedIds, companies]);
 
   const setCompanyId = useCallback((id: string) => {
     setActiveId(id);
@@ -59,11 +88,12 @@ export function FleetCompanyProvider({
     () => ({
       companies,
       company,
-      companyId: activeId,
+      companyId: company ? activeId : null,
       setCompanyId,
-      loading: isLoading,
+      loading: false,
+      memberships,
     }),
-    [companies, company, activeId, setCompanyId, isLoading],
+    [companies, company, activeId, setCompanyId, memberships],
   );
 
   return <FleetCompanyContext.Provider value={value}>{children}</FleetCompanyContext.Provider>;

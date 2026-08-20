@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { useParams } from 'react-router-dom';
+import { Link as RouterLink, useParams } from 'react-router-dom';
 import {
   Alert,
   Box,
@@ -59,7 +59,7 @@ export default function FleetTeamPage() {
   const tier = useFleetAccessTier(companyId);
   const membership = useActiveFleetMembership(companyId);
   const canInviteRegional = tier === 'owner';
-  const canInviteSupport = tier === 'owner';
+  const canInviteSupport = tier === 'regional';
 
   const [createOpen, setCreateOpen] = useState(false);
   const [inviteKind, setInviteKind] = useState<'regional' | 'support'>('support');
@@ -141,20 +141,37 @@ export default function FleetTeamPage() {
   const columns: DataTableColumn<FleetTeamMember>[] = [
     { id: 'name', label: 'Member', render: (m) => m.fullName ?? m.email ?? m.phone },
     { id: 'role', label: 'Role', render: (m) => <Chip size="small" label={roleLabel(m.role)} /> },
-    { id: 'city', label: 'City', render: (m) => m.role === 'support' || m.role === 'dispatcher' ? 'All cities' : m.fleetRegionName ?? (m.role === 'owner' ? 'All cities' : '—') },
+    { id: 'city', label: 'City', render: (m) => m.fleetRegionName ?? (m.role === 'owner' ? 'All cities' : '—') },
     { id: 'email', label: 'Email', render: (m) => m.email ?? '—' },
     { id: 'joined', label: 'Joined', render: (m) => formatDate(m.joinedAt) },
     {
       id: 'actions',
       label: '',
       align: 'right',
-      width: 48,
-      render: (m) =>
-        m.role !== 'owner' && canInviteRegional ? (
-          <IconButton size="small" onClick={(e) => setAnchor({ el: e.currentTarget, member: m })}>
-            <MoreVertIcon fontSize="small" />
-          </IconButton>
-        ) : null,
+      width: 160,
+      render: (m) => {
+        const isSupport = m.role === 'support' || m.role === 'dispatcher';
+        const ticketsCityId = m.fleetRegionId ?? membership?.fleetRegionId;
+        const canOpenTickets = isSupport && Boolean(ticketsCityId) && (tier === 'regional' || tier === 'owner');
+        return (
+          <Box sx={{ display: 'flex', justifyContent: 'flex-end', alignItems: 'center', gap: 0.5 }}>
+            {canOpenTickets && (
+              <Button
+                size="small"
+                component={RouterLink}
+                to={`/portal/${companyId}/regions/${ticketsCityId}?tab=tickets`}
+              >
+                Tickets
+              </Button>
+            )}
+            {m.role !== 'owner' && canInviteRegional ? (
+              <IconButton size="small" onClick={(e) => setAnchor({ el: e.currentTarget, member: m })}>
+                <MoreVertIcon fontSize="small" />
+              </IconButton>
+            ) : null}
+          </Box>
+        );
+      },
     },
   ];
 
@@ -186,9 +203,9 @@ export default function FleetTeamPage() {
       <FleetPageHero
         badge="Access control"
         title="Team members"
-        description="Regional users manage a city. Support team handles driver issues across all cities."
+        description="Regional users manage a city. Support staff are invited by regional fleet and stay in that city."
         actions={
-          canInviteSupport ? (
+          canInviteRegional || canInviteSupport ? (
             <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap' }}>
               {canInviteRegional && (
                 <Button
@@ -200,9 +217,11 @@ export default function FleetTeamPage() {
                   Create Regional User
                 </Button>
               )}
-              <Button variant="contained" startIcon={<PersonAddIcon />} onClick={() => openCreate('support')}>
-                Create Support Team
-              </Button>
+              {canInviteSupport && (
+                <Button variant="contained" startIcon={<PersonAddIcon />} onClick={() => openCreate('support')}>
+                  Create Support Team
+                </Button>
+              )}
             </Box>
           ) : undefined
         }

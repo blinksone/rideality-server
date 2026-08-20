@@ -45,7 +45,7 @@ function AppShell() {
     <Routes>
       <Route element={<AdminLayout />}>
         <Route index element={<DashboardPage />} />
-        <Route element={<PermissionGuard permission="manage_users" />}>
+        <Route element={<PermissionGuard permission={['manage_users', 'ADMIN_VIEW']} anyPermission />}>
           <Route path="users" element={<UsersListPage />} />
           <Route path="users/:id" element={<UserDetailPage />} />
         </Route>
@@ -53,7 +53,7 @@ function AppShell() {
           <Route path="roles" element={<RolesListPage />} />
           <Route path="permissions" element={<PermissionsListPage />} />
         </Route>
-        <Route element={<PermissionGuard permission="manage_fleets" />}>
+        <Route element={<PermissionGuard permission={['manage_fleets', 'FLEET_VIEW']} anyPermission />}>
           <Route path="fleet" element={<CompaniesListPage />} />
           <Route path="fleet/create" element={<CompanyCreatePage />} />
           <Route path="fleet/:id" element={<CompanyDetailPage />} />
@@ -65,7 +65,7 @@ function AppShell() {
           <Route path="finance/adjustments" element={<AdjustmentsPage />} />
           <Route path="finance/payouts" element={<PayoutsPage />} />
         </Route>
-        <Route element={<PermissionGuard permission="manage_users" />}>
+        <Route element={<PermissionGuard permission={['manage_notes', 'manage_users', 'TICKET_VIEW']} anyPermission />}>
           <Route path="support" element={<SupportPage />} />
         </Route>
         <Route element={<PermissionGuard permission="view_reports" />}>

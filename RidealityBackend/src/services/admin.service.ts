@@ -14,6 +14,14 @@ import { isValidE164, normalizePhone } from '../utils/phone';
 import { syncUserStatus } from './onboarding.service';
 import { applyWalletPenalty } from '../clients/finance.client';
 import { canAccessPortal } from './portal.service';
+import {
+  platformRoleToAdminRole,
+  scopedVisibleUserWhere,
+  invitedRolesFor,
+  upsertAdminAssignment,
+  type AdminAssignmentRecord,
+} from './admin-scope.service';
+import { listMyFleetMemberships } from './fleet-access';
 
 interface ListUsersQuery {
   page: number;
@@ -25,23 +33,31 @@ interface ListUsersQuery {
   driverStatus?: DriverOnboardingStatus;
 }
 
-export async function listUsers(query: ListUsersQuery) {
+export async function listUsers(query: ListUsersQuery, assignment?: AdminAssignmentRecord | null) {
   const { page, limit, status, role, regionId, search, driverStatus } = query;
   const skip = (page - 1) * limit;
 
+  const scopeWhere = scopedVisibleUserWhere(assignment ?? null, {
+    excludeUserId: assignment?.userId,
+  });
   const where: Prisma.UserWhereInput = {
     deletedAt: null,
-    ...(status && { status }),
-    ...(regionId && { regionId }),
-    ...(role && { platformRoles: { some: { role } } }),
-    ...(driverStatus && { driverProfile: { onboardingStatus: driverStatus } }),
-    ...(search && {
-      OR: [
-        { phone: { contains: search } },
-        { email: { contains: search, mode: 'insensitive' } },
-        { profile: { fullName: { contains: search, mode: 'insensitive' } } },
-      ],
-    }),
+    AND: [
+      scopeWhere,
+      {
+        ...(status && { status }),
+        ...(regionId && !scopeWhere.regionId ? { regionId } : {}),
+        ...(role && { platformRoles: { some: { role } } }),
+        ...(driverStatus && { driverProfile: { onboardingStatus: driverStatus } }),
+        ...(search && {
+          OR: [
+            { phone: { contains: search } },
+            { email: { contains: search, mode: 'insensitive' } },
+            { profile: { fullName: { contains: search, mode: 'insensitive' } } },
+          ],
+        }),
+      },
+    ],
   };
 
   const [users, total] = await Promise.all([
@@ -89,15 +105,74 @@ export async function getAdminUserDetail(userId: string) {
       documents: true,
       abuseRecords: { orderBy: { createdAt: 'desc' }, take: 20 },
       wallet: true,
+      region: { select: { id: true, code: true, name: true } },
       adminNotes: { orderBy: { createdAt: 'desc' }, take: 10, include: { author: { include: { profile: true } } } },
+      adminAssignment: {
+        include: {
+          continent: { select: { id: true, code: true, name: true } },
+          country: { select: { id: true, code: true, name: true } },
+          province: { select: { id: true, name: true, code: true } },
+          city: { select: { id: true, name: true } },
+          invitedBy: {
+            include: { user: { include: { profile: true } } },
+          },
+          invitees: {
+            include: {
+              user: { include: { profile: true } },
+              continent: { select: { name: true } },
+              country: { select: { name: true, code: true } },
+              province: { select: { name: true } },
+              city: { select: { name: true } },
+            },
+            orderBy: { createdAt: 'desc' },
+          },
+        },
+      },
     },
   });
 
   if (!user) throw new NotFoundError('User not found');
 
+  const fleetMemberships = await listMyFleetMemberships(userId);
+  const assignment = user.adminAssignment;
+  const adminAssignment = assignment
+    ? {
+        role: assignment.role,
+        scopeType: assignment.scopeType,
+        continent: assignment.continent,
+        country: assignment.country,
+        province: assignment.province,
+        city: assignment.city,
+        canInvite: invitedRolesFor(assignment.role),
+        invitedBy: assignment.invitedBy
+          ? {
+              userId: assignment.invitedBy.userId,
+              role: assignment.invitedBy.role,
+              fullName: assignment.invitedBy.user.profile?.fullName ?? null,
+              email: assignment.invitedBy.user.email,
+            }
+          : null,
+        team: assignment.invitees.map((row) => ({
+          userId: row.userId,
+          role: row.role,
+          fullName: row.user.profile?.fullName ?? null,
+          email: row.user.email,
+          phone: row.user.phone,
+          scopeLabel: [row.continent?.name, row.country ? `${row.country.name} (${row.country.code})` : null, row.province?.name, row.city?.name]
+            .filter(Boolean)
+            .join(' / '),
+          createdAt: row.createdAt,
+        })),
+      }
+    : null;
+
   return {
     ...user,
     passwordHash: undefined,
+    adminAssignment,
+    adminRole: assignment?.role ?? null,
+    scopeType: assignment?.scopeType ?? null,
+    fleetMemberships,
     driverProfile: user.driverProfile
       ? {
           ...user.driverProfile,
@@ -368,6 +443,7 @@ export async function createAdminUser(
     permissionIds?: string[];
   },
   ipAddress?: string,
+  options?: { allowDelegatedCreate?: boolean },
 ) {
   if (data.platformRole === PlatformRole.SUPER_ADMIN && !actorRoles.includes(PlatformRole.SUPER_ADMIN)) {
     throw new ForbiddenError('Only SUPER_ADMIN can create SUPER_ADMIN users');
@@ -375,7 +451,11 @@ export async function createAdminUser(
   if (data.platformRole === PlatformRole.ADMIN && !actorRoles.includes(PlatformRole.SUPER_ADMIN)) {
     throw new ForbiddenError('Only SUPER_ADMIN can create ADMIN users');
   }
-  if (data.platformRole === PlatformRole.SUB_ADMIN && !actorRoles.includes(PlatformRole.SUPER_ADMIN)) {
+  if (
+    data.platformRole === PlatformRole.SUB_ADMIN &&
+    !actorRoles.includes(PlatformRole.SUPER_ADMIN) &&
+    !options?.allowDelegatedCreate
+  ) {
     throw new ForbiddenError('Only SUPER_ADMIN can create SUB_ADMIN users');
   }
 
@@ -506,6 +586,17 @@ export async function createAdminUser(
       ipAddress,
     },
   });
+
+  const adminRole = platformRoleToAdminRole(data.platformRole);
+  if (adminRole) {
+    await upsertAdminAssignment({
+      userId: user.id,
+      role: adminRole,
+      countryId: adminRole === 'FLEET_OWNER' ? data.regionId : null,
+      continentId: adminRole === 'FLEET_OWNER' ? region.continentId : null,
+      invitedByUserId: actorId,
+    });
+  }
 
   const userDetail = await getAdminUserDetail(user.id);
   return temporaryPassword ? { ...userDetail, temporaryPassword } : userDetail;

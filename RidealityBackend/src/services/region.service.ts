@@ -1,10 +1,150 @@
 import { Prisma } from '@prisma/client';
 import { prisma } from '../lib/prisma';
-import { ConflictError, NotFoundError } from '../utils/errors';
+import { ConflictError, ForbiddenError, NotFoundError, ValidationError } from '../utils/errors';
+import { isSuperAdminRole, type AdminAssignmentRecord } from './admin-scope.service';
 
-export async function listActiveRegions() {
+function countryFilter(assignment?: AdminAssignmentRecord | null): Prisma.RegionWhereInput {
+  if (!assignment || isSuperAdminRole(assignment.role) || assignment.scopeType === 'PLATFORM' || assignment.scopeType === 'GLOBAL') {
+    return {};
+  }
+  if (assignment.scopeType === 'CONTINENT' && assignment.continentId) {
+    return { continentId: assignment.continentId };
+  }
+  if (assignment.countryId) {
+    return { id: assignment.countryId };
+  }
+  return { id: '__none__' };
+}
+
+export async function listContinents(assignment?: AdminAssignmentRecord | null) {
+  const where: Prisma.ContinentWhereInput = {};
+  if (assignment?.scopeType === 'CONTINENT' && assignment.continentId) {
+    where.id = assignment.continentId;
+  } else if (assignment?.continentId && assignment.scopeType !== 'PLATFORM' && assignment.scopeType !== 'GLOBAL' && !isSuperAdminRole(assignment.role)) {
+    where.id = assignment.continentId;
+  }
+  return prisma.continent.findMany({
+    where,
+    orderBy: { name: 'asc' },
+    select: { id: true, code: true, name: true },
+  });
+}
+
+export async function listProvinces(countryId: string, assignment?: AdminAssignmentRecord | null) {
+  const allowedCountries = countryFilter(assignment);
+  if (allowedCountries.id && allowedCountries.id !== countryId && allowedCountries.id !== '__none__') {
+    throw new ForbiddenError('Forbidden: outside your assigned scope');
+  }
+  if (allowedCountries.continentId) {
+    const country = await prisma.region.findUnique({
+      where: { id: countryId },
+      select: { continentId: true },
+    });
+    if (!country || country.continentId !== allowedCountries.continentId) {
+      throw new ForbiddenError('Forbidden: outside your assigned scope');
+    }
+  }
+  if (assignment?.scopeType === 'REGIONAL' && assignment.regionalId) {
+    return prisma.province.findMany({
+      where: { id: assignment.regionalId, countryId },
+      orderBy: { name: 'asc' },
+      select: { id: true, name: true, code: true, countryId: true },
+    });
+  }
+  return prisma.province.findMany({
+    where: { countryId },
+    orderBy: { name: 'asc' },
+    select: { id: true, name: true, code: true, countryId: true },
+  });
+}
+
+export async function listCities(query: {
+  countryId?: string;
+  provinceId?: string;
+}, assignment?: AdminAssignmentRecord | null) {
+  const where: Prisma.CityWhereInput = {};
+  if (query.provinceId) where.provinceId = query.provinceId;
+  if (query.countryId) where.province = { countryId: query.countryId };
+  if (assignment?.scopeType === 'CITY' && assignment.cityId) {
+    where.id = assignment.cityId;
+  } else if (assignment?.scopeType === 'REGIONAL' && assignment.regionalId) {
+    where.provinceId = assignment.regionalId;
+  } else if (assignment?.scopeType === 'COUNTRY' && assignment.countryId) {
+    where.province = { countryId: assignment.countryId };
+  } else if (assignment?.scopeType === 'CONTINENT' && assignment.continentId) {
+    where.province = { country: { continentId: assignment.continentId } };
+  }
+  return prisma.city.findMany({
+    where,
+    orderBy: { name: 'asc' },
+    take: 500,
+    select: {
+      id: true,
+      name: true,
+      provinceId: true,
+      province: { select: { id: true, name: true, countryId: true } },
+    },
+  });
+}
+
+export async function createCity(
+  data: { name: string; provinceId: string },
+  assignment?: AdminAssignmentRecord | null,
+) {
+  const name = data.name.trim().replace(/\s+/g, ' ');
+  if (name.length < 2) throw new ValidationError('City name must be at least 2 characters');
+
+  const province = await prisma.province.findUnique({
+    where: { id: data.provinceId },
+    select: {
+      id: true,
+      name: true,
+      countryId: true,
+      country: { select: { continentId: true } },
+    },
+  });
+  if (!province) throw new NotFoundError('Province not found');
+
+  if (assignment && !isSuperAdminRole(assignment.role) && assignment.scopeType !== 'PLATFORM' && assignment.scopeType !== 'GLOBAL') {
+    if (assignment.scopeType === 'CITY') {
+      throw new ForbiddenError('City admins cannot create cities');
+    }
+    if (assignment.scopeType === 'REGIONAL' && assignment.regionalId !== province.id) {
+      throw new ForbiddenError('Province is outside your assigned region');
+    }
+    if (assignment.scopeType === 'COUNTRY' && assignment.countryId && assignment.countryId !== province.countryId) {
+      throw new ForbiddenError('Province is outside your assigned country');
+    }
+    if (assignment.scopeType === 'CONTINENT' && assignment.continentId && province.country.continentId !== assignment.continentId) {
+      throw new ForbiddenError('Province is outside your assigned continent');
+    }
+  }
+
+  const existing = await prisma.city.findFirst({
+    where: { provinceId: province.id, name: { equals: name, mode: 'insensitive' } },
+    select: {
+      id: true,
+      name: true,
+      provinceId: true,
+      province: { select: { id: true, name: true, countryId: true } },
+    },
+  });
+  if (existing) return existing;
+
+  return prisma.city.create({
+    data: { provinceId: province.id, name },
+    select: {
+      id: true,
+      name: true,
+      provinceId: true,
+      province: { select: { id: true, name: true, countryId: true } },
+    },
+  });
+}
+
+export async function listActiveRegions(assignment?: AdminAssignmentRecord | null) {
   return prisma.region.findMany({
-    where: { isActive: true },
+    where: { isActive: true, ...countryFilter(assignment) },
     orderBy: { name: 'asc' },
     select: {
       id: true,
@@ -12,6 +152,7 @@ export async function listActiveRegions() {
       name: true,
       currency: true,
       phonePrefix: true,
+      continentId: true,
     },
   });
 }

@@ -15,13 +15,15 @@ import FolderIcon from '@mui/icons-material/Folder';
 import SettingsIcon from '@mui/icons-material/Settings';
 import PaidIcon from '@mui/icons-material/Paid';
 import LocationCityIcon from '@mui/icons-material/LocationCity';
+import SupportAgentIcon from '@mui/icons-material/SupportAgent';
+import ConfirmationNumberIcon from '@mui/icons-material/ConfirmationNumber';
 import type { FleetAccessTier } from '@/api/types';
 
 export interface FleetNavItem {
   label: string;
   segment: string;
   icon: SvgIconComponent;
-  badge?: 'pendingInvites' | 'pendingApprovals' | 'unreadNotifications';
+  badge?: 'pendingInvites' | 'pendingApprovals' | 'unreadNotifications' | 'pendingTickets';
   /** If set, only these membership tiers see the item. */
   visibleTo?: FleetAccessTier[];
 }
@@ -32,7 +34,9 @@ export interface FleetNavSection {
 }
 
 const OWNER: FleetAccessTier[] = ['owner'];
-const CITY_OPS: FleetAccessTier[] = ['regional', 'support'];
+const REGIONAL: FleetAccessTier[] = ['regional'];
+const CITY_DESK: FleetAccessTier[] = ['regional', 'support'];
+const LEAD: FleetAccessTier[] = ['owner', 'regional'];
 const ALL: FleetAccessTier[] = ['owner', 'regional', 'support'];
 
 export const FLEET_NAV_SECTIONS: FleetNavSection[] = [
@@ -41,14 +45,16 @@ export const FLEET_NAV_SECTIONS: FleetNavSection[] = [
     items: [{ label: 'Dashboard', segment: 'dashboard', icon: DashboardIcon, visibleTo: ALL }],
   },
   {
-    title: 'Region operations',
+    title: 'City operations',
     items: [
-      { label: 'Regions', segment: 'regions', icon: LocationCityIcon, visibleTo: OWNER },
-      { label: 'Drivers', segment: 'drivers', icon: PeopleIcon, visibleTo: CITY_OPS },
-      { label: 'Vehicles', segment: 'vehicles', icon: DirectionsCarIcon, visibleTo: CITY_OPS },
-      { label: 'Invitations', segment: 'invitations', icon: MailOutlineOutlinedIcon, badge: 'pendingInvites', visibleTo: CITY_OPS },
-      { label: 'Documents', segment: 'documents', icon: FolderIcon, badge: 'pendingApprovals', visibleTo: CITY_OPS },
-      { label: 'Trips', segment: 'trips', icon: RouteIcon, visibleTo: CITY_OPS },
+      { label: 'Cities', segment: 'regions', icon: LocationCityIcon, visibleTo: OWNER },
+      { label: 'City desk', segment: 'city-desk', icon: SupportAgentIcon, visibleTo: CITY_DESK },
+      { label: 'Tickets', segment: 'tickets', icon: ConfirmationNumberIcon, badge: 'pendingTickets', visibleTo: CITY_DESK },
+      { label: 'Drivers', segment: 'drivers', icon: PeopleIcon, visibleTo: CITY_DESK },
+      { label: 'Vehicles', segment: 'vehicles', icon: DirectionsCarIcon, visibleTo: REGIONAL },
+      { label: 'Documents', segment: 'documents', icon: FolderIcon, badge: 'pendingApprovals', visibleTo: REGIONAL },
+      { label: 'Invitations', segment: 'invitations', icon: MailOutlineOutlinedIcon, badge: 'pendingInvites', visibleTo: REGIONAL },
+      { label: 'Trips', segment: 'trips', icon: RouteIcon, visibleTo: CITY_DESK },
     ],
   },
   {
@@ -64,7 +70,7 @@ export const FLEET_NAV_SECTIONS: FleetNavSection[] = [
     title: 'Company',
     items: [
       { label: 'Fleet company', segment: 'companies', icon: BusinessIcon, visibleTo: OWNER },
-      { label: 'Team Members', segment: 'team', icon: GroupsIcon, visibleTo: OWNER },
+      { label: 'Team Members', segment: 'team', icon: GroupsIcon, visibleTo: LEAD },
       { label: 'Reports', segment: 'reports', icon: AssessmentIcon, visibleTo: OWNER },
     ],
   },
@@ -78,14 +84,19 @@ export const FLEET_NAV_SECTIONS: FleetNavSection[] = [
 ];
 
 export function getFleetNavSections(tier: FleetAccessTier | null): FleetNavSection[] {
-  return FLEET_NAV_SECTIONS.map((section) => ({
-    ...section,
-    items: section.items.filter((item) => {
-      const allowed = item.visibleTo ?? ALL;
-      if (!tier) return allowed.includes('regional') || allowed.includes('support');
-      return allowed.includes(tier);
-    }),
-  })).filter((section) => section.items.length > 0);
+  return FLEET_NAV_SECTIONS.map((section) => {
+    const title =
+      section.title === 'City operations' && tier === 'owner' ? 'Coverage' : section.title;
+    return {
+      ...section,
+      title,
+      items: section.items.filter((item) => {
+        const allowed = item.visibleTo ?? ALL;
+        if (!tier) return allowed.includes('support');
+        return allowed.includes(tier);
+      }),
+    };
+  }).filter((section) => section.items.length > 0);
 }
 
 export const TIER_LABEL: Record<FleetAccessTier, string> = {
@@ -103,4 +114,19 @@ export const FLEET_NAV_ITEMS: FleetNavItem[] = FLEET_NAV_SECTIONS.flatMap((s) =>
 
 export function fleetPath(companyId: string, segment: string) {
   return `/portal/${companyId}/${segment}`;
+}
+
+export function fleetNavItemPath(
+  companyId: string,
+  segment: string,
+  membership?: { fleetRegionId?: string | null } | null,
+) {
+  if ((segment === 'city-desk' || segment === 'tickets') && membership?.fleetRegionId) {
+    const query = segment === 'tickets' ? '?tab=tickets' : '';
+    return `/portal/${companyId}/regions/${membership.fleetRegionId}${query}`;
+  }
+  if (segment === 'city-desk' || segment === 'tickets') {
+    return fleetPath(companyId, 'drivers');
+  }
+  return fleetPath(companyId, segment);
 }

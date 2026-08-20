@@ -39,3 +39,8 @@ export const updateRegionSchema = z.object({
     .optional(),
   isActive: z.boolean().optional(),
 });
+
+export const createCitySchema = z.object({
+  name: z.string().trim().min(2).max(120),
+  provinceId: z.string().uuid(),
+});

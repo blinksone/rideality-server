@@ -268,6 +268,7 @@ export async function listWallets(query: {
   limit: number;
   ownerType?: WalletOwnerType;
   regionId?: string;
+  continentId?: string;
   status?: WalletStatus;
   search?: string;
   fleetCompanyId?: string;
@@ -287,6 +288,7 @@ export async function listWallets(query: {
 
   if (query.ownerType) where.ownerType = query.ownerType;
   if (query.regionId) where.regionId = query.regionId;
+  if (query.continentId) where.region = { continentId: query.continentId };
   if (query.status) where.status = query.status;
   if (query.fleetCompanyId) where.fleetCompanyId = query.fleetCompanyId;
   if (query.currency) where.currency = query.currency;
@@ -1076,6 +1078,7 @@ export async function bulkSetWalletStatus(
 export async function exportWalletsCsv(query: {
   ownerType?: WalletOwnerType;
   regionId?: string;
+  continentId?: string;
   status?: WalletStatus;
   search?: string;
   currency?: string;

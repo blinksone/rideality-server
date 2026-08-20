@@ -3,6 +3,7 @@ import { prisma } from '../lib/prisma';
 import { resolveUserPermissionKeys } from './permission.service';
 import { formatUserResponse } from './user.service';
 import { listMyFleetMemberships } from './fleet-access';
+import { getAdminAssignment, invitedRolesFor } from './admin-scope.service';
 
 export const PORTAL_PLATFORM_ROLES: PlatformRole[] = [
   PlatformRole.SUPER_ADMIN,
@@ -31,7 +32,7 @@ export async function getPortalMe(userId: string) {
   const profile = await formatUserResponse(userId);
   const access = await resolveUserPermissionKeys(userId);
   const platformRoles = profile.roles as PlatformRole[];
-  const [region, account, fleetMemberships] = await Promise.all([
+  const [region, account, fleetMemberships, assignment] = await Promise.all([
     prisma.region.findUnique({
       where: { id: profile.regionId },
       select: { id: true, code: true, name: true },
@@ -41,16 +42,24 @@ export async function getPortalMe(userId: string) {
       select: { mustResetPassword: true },
     }),
     listMyFleetMemberships(userId),
+    getAdminAssignment(userId),
   ]);
 
   return {
     ...profile,
     platformRoles,
     effectivePermissions: access,
-    isSuperAdmin: platformRoles.includes(PlatformRole.SUPER_ADMIN),
+    isSuperAdmin: platformRoles.includes(PlatformRole.SUPER_ADMIN) || assignment?.role === 'SUPER_ADMIN',
     region,
     mustResetPassword: account?.mustResetPassword ?? false,
     fleetMemberships,
+    adminRole: assignment?.role ?? null,
+    scopeType: assignment?.scopeType ?? null,
+    continentId: assignment?.continentId ?? null,
+    countryId: assignment?.countryId ?? null,
+    regionalId: assignment?.regionalId ?? null,
+    cityId: assignment?.cityId ?? null,
+    canInvite: assignment ? invitedRolesFor(assignment.role) : [],
   };
 }
 

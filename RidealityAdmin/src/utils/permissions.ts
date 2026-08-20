@@ -42,7 +42,7 @@ export function hasPermission(
   if (isSuperAdmin) return true;
   if (!effective?.length) return false;
   const requiredList = Array.isArray(required) ? required : [required];
-  return requiredList.some((p) => effective.includes(p));
+  return requiredList.every((p) => effective.includes(p));
 }
 
 export function hasAnyPermission(
@@ -50,7 +50,9 @@ export function hasAnyPermission(
   required: PermissionKey[],
   isSuperAdmin = false,
 ): boolean {
-  return hasPermission(effective, required, isSuperAdmin);
+  if (isSuperAdmin) return true;
+  if (!effective?.length) return false;
+  return required.some((p) => effective.includes(p));
 }
 
 export function hasAllPermissions(

@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import { PlatformRole } from '@prisma/client';
 import { authenticate, AuthRequest, requirePasswordResetComplete, requireRoles } from '../middleware/auth';
-import { loadAdminPermissions, requirePermission, PERMISSION_KEYS } from '../middleware/permissions';
+import { loadAdminPermissions, requirePermission, requirePermissionInScope, PERMISSION_KEYS, AdminAuthRequest } from '../middleware/permissions';
 import { validate } from '../middleware/validate';
 import { sendSuccess, sendPaginated } from '../utils/response';
 import { ForbiddenError } from '../utils/errors';
@@ -9,11 +9,13 @@ import { canAccessPortalAsync, getPortalMe, getDashboardStats } from '../service
 import * as adminService from '../services/admin.service';
 import * as fleetHierarchy from '../services/fleet-hierarchy.service';
 import * as ratingService from '../services/rating.service';
+import { listInvitees, scopeAllows, getAdminAssignment } from '../services/admin-scope.service';
 import { param } from '../utils/params';
 import {
   globalAuditLogSchema,
   moderateRatingSchema,
   createPlatformStaffSchema,
+  updatePlatformStaffSchema,
   listPlatformStaffSchema,
 } from '../validators/admin.validator';
 
@@ -106,7 +108,7 @@ const requireSuperAdmin = requireRoles(PlatformRole.SUPER_ADMIN);
 
 router.post(
   '/portal/users',
-  requireSuperAdmin,
+  requirePermissionInScope(PERMISSION_KEYS.ADMIN_CREATE),
   validate(createPlatformStaffSchema),
   async (req: AuthRequest, res, next) => {
     try {
@@ -123,19 +125,39 @@ router.post(
   },
 );
 
+router.patch(
+  '/portal/users/:id',
+  requirePermissionInScope(PERMISSION_KEYS.ADMIN_UPDATE),
+  validate(updatePlatformStaffSchema),
+  async (req: AdminAuthRequest, res, next) => {
+    try {
+      const data = await fleetHierarchy.updatePlatformStaffUser(
+        req.user!.sub,
+        req.user!.platformRoles,
+        param(req.params.id),
+        req.body,
+        req.ip,
+      );
+      sendSuccess(res, data);
+    } catch (err) {
+      next(err);
+    }
+  },
+);
+
 router.get(
   '/portal/users',
-  requireSuperAdmin,
+  requirePermission(PERMISSION_KEYS.ADMIN_VIEW),
   validate(listPlatformStaffSchema, 'query'),
-  async (req: AuthRequest, res, next) => {
+  async (req: AdminAuthRequest, res, next) => {
     try {
       const query = req.query as unknown as {
         page: number;
         limit: number;
-        type?: 'SUB_ADMIN' | 'FLEET_OWNER' | 'FINANCE_USER' | 'PLATFORM_SUPPORT';
+        type?: fleetHierarchy.PlatformStaffType;
         search?: string;
       };
-      const { users, total } = await fleetHierarchy.listPlatformStaffUsers(query);
+      const { users, total } = await fleetHierarchy.listPlatformStaffUsers(query, req.adminAssignment);
       sendPaginated(res, users, { page: query.page, limit: query.limit, total });
     } catch (err) {
       next(err);
@@ -150,6 +172,50 @@ router.get(
     try {
       const data = await fleetHierarchy.getFleetOwnerCompanyDetail(param(req.params.companyId));
       sendSuccess(res, data);
+    } catch (err) {
+      next(err);
+    }
+  },
+);
+
+router.get(
+  '/fleet-owners/:id/regional-fleets',
+  requirePermissionInScope(PERMISSION_KEYS.ADMIN_VIEW),
+  async (req: AuthRequest, res, next) => {
+    try {
+      const caller = await getAdminAssignment(req.user!.sub);
+      const { parent, invitees } = await listInvitees(param(req.params.id), 'REGIONAL_FLEET');
+      if (caller && !(await scopeAllows(caller, {
+        continentId: parent.continentId,
+        countryId: parent.countryId,
+        regionalId: parent.regionalId,
+        cityId: parent.cityId,
+      }))) {
+        throw new ForbiddenError('Forbidden: outside your assigned scope');
+      }
+      sendSuccess(res, { parent, regionalFleets: invitees });
+    } catch (err) {
+      next(err);
+    }
+  },
+);
+
+router.get(
+  '/regional-fleets/:id/support',
+  requirePermissionInScope(PERMISSION_KEYS.ADMIN_VIEW),
+  async (req: AuthRequest, res, next) => {
+    try {
+      const caller = await getAdminAssignment(req.user!.sub);
+      const { parent, invitees } = await listInvitees(param(req.params.id), 'FLEET_SUPPORT');
+      if (caller && !(await scopeAllows(caller, {
+        continentId: parent.continentId,
+        countryId: parent.countryId,
+        regionalId: parent.regionalId,
+        cityId: parent.cityId,
+      }))) {
+        throw new ForbiddenError('Forbidden: outside your assigned scope');
+      }
+      sendSuccess(res, { parent, support: invitees });
     } catch (err) {
       next(err);
     }

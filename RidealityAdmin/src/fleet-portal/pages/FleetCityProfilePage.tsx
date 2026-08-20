@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Link as RouterLink, useParams } from 'react-router-dom';
+import { Link as RouterLink, useParams, useSearchParams } from 'react-router-dom';
 import {
   Alert,
   Box,
@@ -41,6 +41,7 @@ import FleetMetricRow, { FleetMetricCell } from '@/fleet-portal/components/Fleet
 import FleetPageHero from '@/fleet-portal/components/FleetPageHero';
 import FleetDriverDetailDialog from '@/fleet-portal/components/FleetDriverDetailDialog';
 import { fleetPath } from '@/fleet-portal/fleetNavConfig';
+import { useActiveFleetMembership, useFleetAccessTier } from '@/hooks/useFleetPortalMode';
 import { useNotify } from '@/services/notification';
 import { formatDate, formatLabel } from '@/utils/format';
 
@@ -52,9 +53,24 @@ const TRIP_STATUS_COLOR: Record<string, 'success' | 'warning' | 'error' | 'info'
   cancelled: 'error',
 };
 
+const CITY_TABS = ['overview', 'drivers', 'vehicles', 'trips', 'wallets', 'tickets', 'documents'] as const;
+
 export default function FleetCityProfilePage() {
   const { companyId = '', regionId = '' } = useParams();
-  const [tab, setTab] = useState(0);
+  const membership = useActiveFleetMembership(companyId);
+  const tier = useFleetAccessTier(companyId);
+  const [searchParams, setSearchParams] = useSearchParams();
+  const tabKey = CITY_TABS.includes(searchParams.get('tab') as (typeof CITY_TABS)[number])
+    ? (searchParams.get('tab') as (typeof CITY_TABS)[number])
+    : 'overview';
+  const tab = CITY_TABS.indexOf(tabKey);
+  const setTab = (index: number) => {
+    const next = CITY_TABS[index] ?? 'overview';
+    const nextParams = new URLSearchParams(searchParams);
+    if (next === 'overview') nextParams.delete('tab');
+    else nextParams.set('tab', next);
+    setSearchParams(nextParams, { replace: true });
+  };
   const [selectedDriverId, setSelectedDriverId] = useState<string | null>(null);
   const [rejectTarget, setRejectTarget] = useState<{ id: string; driverName: string; type: string } | null>(null);
   const [rejectionReason, setRejectionReason] = useState('');
@@ -64,7 +80,7 @@ export default function FleetCityProfilePage() {
   const { data, isLoading, error } = useQuery({
     queryKey: ['fleet-city-profile', companyId, regionId],
     queryFn: () => getFleetCityProfile(companyId, regionId),
-    enabled: Boolean(companyId && regionId),
+    enabled: Boolean(companyId && regionId && membership),
   });
 
   const invalidateCity = () => {
@@ -337,8 +353,13 @@ export default function FleetCityProfilePage() {
       <FleetPageHero
         badge="City profile"
         title={isLoading ? 'Loading city…' : cityName}
-        description="Drivers, vehicles, trips, wallets, and complaints for this city. Approve pending drivers and documents from the Drivers and Documents tabs."
+        description={
+          tier === 'support'
+            ? 'Handle tickets and driver assistance in this city. Regional fleet supervises this desk.'
+            : 'Supervise this city. Fleet Support handles tickets and driver assistance; you can open the queue and step in when needed.'
+        }
         actions={
+          tier === 'owner' ? (
           <Button
             component={RouterLink}
             to={fleetPath(companyId, 'regions')}
@@ -348,6 +369,7 @@ export default function FleetCityProfilePage() {
           >
             All cities
           </Button>
+          ) : undefined
         }
       />
 
@@ -388,18 +410,44 @@ export default function FleetCityProfilePage() {
         <Tab label={`Vehicles (${stats?.vehicles ?? 0})`} />
         <Tab label={`Trips (${stats?.trips ?? 0})`} />
         <Tab label="Wallets" />
-        <Tab label={`Complaints (${stats?.pendingComplaints ?? 0})`} />
+        <Tab label={`Tickets (${stats?.pendingComplaints ?? 0})`} />
         <Tab label="Documents" />
       </Tabs>
 
       {tab === 0 && (
         <>
-          <FleetContentCard title="Regional fleet" subtitle="City admins who manage day-to-day driver operations">
+          <FleetContentCard title="Regional fleet" subtitle="City lead for drivers, vehicles, and documents">
             {(data?.regionalAdmins.length ?? 0) === 0 ? (
               <Typography color="text.secondary">No regional fleet admin for this city yet.</Typography>
             ) : (
               <List dense disablePadding>
                 {data?.regionalAdmins.map((a) => (
+                  <ListItem key={a.userId} divider sx={{ px: 0 }}>
+                    <ListItemText primary={a.fullName ?? a.phone} secondary={[a.phone, a.email].filter(Boolean).join(' · ')} />
+                  </ListItem>
+                ))}
+              </List>
+            )}
+          </FleetContentCard>
+
+          <FleetContentCard
+            title="Fleet Support"
+            subtitle="Handles tickets and driver assistance in this city"
+            actions={
+              <Button size="small" variant="outlined" onClick={() => setTab(5)}>
+                View tickets
+              </Button>
+            }
+          >
+            {(data?.supportStaff?.length ?? 0) === 0 ? (
+              <Typography color="text.secondary">
+                {tier === 'regional'
+                  ? 'No fleet support in this city yet. Invite them from Team Members.'
+                  : 'No fleet support assigned to this city yet.'}
+              </Typography>
+            ) : (
+              <List dense disablePadding>
+                {data?.supportStaff.map((a) => (
                   <ListItem key={a.userId} divider sx={{ px: 0 }}>
                     <ListItemText primary={a.fullName ?? a.phone} secondary={[a.phone, a.email].filter(Boolean).join(' · ')} />
                   </ListItem>
@@ -421,6 +469,11 @@ export default function FleetCityProfilePage() {
                     />
                     <Box sx={{ display: 'flex', gap: 1, alignItems: 'center', ml: 2, mt: 0.5 }}>
                       <Chip size="small" color="warning" label={formatLabel(item.type)} />
+                      {item.type === 'complaint' && (
+                        <Button size="small" onClick={() => setTab(5)}>
+                          Open ticket
+                        </Button>
+                      )}
                       {item.type === 'onboarding' && (
                         <Button
                           size="small"
@@ -540,7 +593,14 @@ export default function FleetCityProfilePage() {
       )}
 
       {tab === 5 && (
-        <FleetContentCard title="Complaints" subtitle="Reports against drivers in this city. Pending items need support.">
+        <FleetContentCard
+          title="Tickets"
+          subtitle={
+            tier === 'support'
+              ? 'Driver complaints in this city. Respond and mark resolved when the issue is handled.'
+              : 'City ticket queue handled by Fleet Support. You can review every ticket and step in to resolve if needed.'
+          }
+        >
           <DataTable
             columns={complaintColumns}
             rows={data?.complaints ?? []}
@@ -551,7 +611,7 @@ export default function FleetCityProfilePage() {
             onPageChange={() => {}}
             onRowsPerPageChange={() => {}}
             loading={isLoading}
-            emptyMessage="No complaints for this city"
+            emptyMessage="No tickets for this city"
             paperSx={{ border: 0, boxShadow: 'none' }}
           />
         </FleetContentCard>

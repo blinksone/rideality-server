@@ -121,6 +121,31 @@ enum FleetMemberStatus {
   removed
 }
 
+enum AdminRole {
+  SUPER_ADMIN
+  SUB_ADMIN
+  FINANCE_USER
+  PLATFORM_SUPPORT
+  GLOBAL_ADMIN
+  CONTINENT_ADMIN
+  COUNTRY_ADMIN
+  REGIONAL_ADMIN
+  CITY_ADMIN
+  FLEET_OWNER
+  REGIONAL_FLEET
+  FLEET_SUPPORT
+  FLEET_FINANCE
+}
+
+enum ScopeType {
+  PLATFORM
+  GLOBAL
+  CONTINENT
+  COUNTRY
+  REGIONAL
+  CITY
+}
+
 enum AbuseActionType {
   warning
   restriction
@@ -234,7 +259,19 @@ enum FleetNotificationType {
   system
 }
 
-// ─── Region ──────────────────────────────────────────────────────────────────
+// ─── Geography (continent → country → province → city) ───────────────────────
+
+model Continent {
+  id        String   @id @default(uuid())
+  code      String   @unique
+  name      String
+  createdAt DateTime @default(now()) @map("created_at")
+
+  countries        Region[]
+  adminAssignments AdminAssignment[]
+
+  @@map("continents")
+}
 
 model Region {
   id           String   @id @default(uuid())
@@ -243,13 +280,52 @@ model Region {
   currency     String   @default("PKR")
   phonePrefix  String   @map("phone_prefix")
   isActive     Boolean  @default(true) @map("is_active")
+  continentId  String?  @map("continent_id")
   createdAt    DateTime @default(now()) @map("created_at")
 
-  users          User[]
-  fleetCompanies FleetCompany[]
-  wallets        Wallet[]
+  continent        Continent?        @relation(fields: [continentId], references: [id])
+  provinces        Province[]
+  users            User[]
+  fleetCompanies   FleetCompany[]
+  wallets          Wallet[]
+  adminAssignments AdminAssignment[]
 
+  @@index([continentId])
   @@map("regions")
+}
+
+/// Country subdivision (Sindh, Punjab) — REGIONAL admin scope.
+model Province {
+  id        String   @id @default(uuid())
+  countryId String   @map("country_id")
+  code      String?
+  name      String
+  createdAt DateTime @default(now()) @map("created_at")
+
+  country          Region            @relation(fields: [countryId], references: [id], onDelete: Cascade)
+  fleetRegions     FleetRegion[]
+  cities           City[]
+  adminAssignments AdminAssignment[]
+
+  @@unique([countryId, name])
+  @@index([countryId])
+  @@map("provinces")
+}
+
+/// Geographic city under a province — CITY admin scope (independent of fleets).
+model City {
+  id         String   @id @default(uuid())
+  provinceId String   @map("province_id")
+  name       String
+  createdAt  DateTime @default(now()) @map("created_at")
+
+  province         Province          @relation(fields: [provinceId], references: [id], onDelete: Cascade)
+  fleetRegions     FleetRegion[]
+  adminAssignments AdminAssignment[]
+
+  @@unique([provinceId, name])
+  @@index([provinceId])
+  @@map("cities")
 }
 
 // ─── User (identity root) ────────────────────────────────────────────────────
@@ -302,6 +378,7 @@ model User {
   fleetNotifications FleetNotification[]
   userRoles         UserRole[]
   userPermissions   UserPermission[]
+  adminAssignment   AdminAssignment?
   walletAdjustmentsRequested WalletAdjustment[] @relation("AdjustmentRequester")
   walletAdjustmentsReviewed  WalletAdjustment[] @relation("AdjustmentReviewer")
   walletTransactionsCreated    WalletTransaction[] @relation("WalletTransactionCreator")
@@ -399,6 +476,48 @@ model UserPermission {
   @@index([userId])
   @@index([permissionId])
   @@map("user_permissions")
+}
+
+/// Staff RBAC profile: Role + Permission + Scope on an existing User (not a second login).
+model AdminAssignment {
+  id           String     @id @default(uuid())
+  userId       String     @unique @map("user_id")
+  role         AdminRole
+  scopeType    ScopeType  @map("scope_type")
+  continentId  String?    @map("continent_id")
+  countryId    String?    @map("country_id")
+  regionalId   String?    @map("regional_id")
+  cityId       String?    @map("city_id")
+  invitedById  String?    @map("invited_by_id")
+  createdAt    DateTime   @default(now()) @map("created_at")
+  updatedAt    DateTime   @updatedAt @map("updated_at")
+
+  user      User                   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  continent Continent?             @relation(fields: [continentId], references: [id])
+  country   Region?                @relation(fields: [countryId], references: [id])
+  province  Province?              @relation(fields: [regionalId], references: [id])
+  city      City?                  @relation(fields: [cityId], references: [id])
+  invitedBy AdminAssignment?       @relation("AdminInvites", fields: [invitedById], references: [id])
+  invitees  AdminAssignment[]      @relation("AdminInvites")
+  grants    AdminPermissionGrant[]
+
+  @@index([role, continentId, countryId, regionalId, cityId])
+  @@index([invitedById])
+  @@index([cityId])
+  @@index([regionalId])
+  @@map("admin_assignments")
+}
+
+model AdminPermissionGrant {
+  id           String   @id @default(uuid())
+  assignmentId String   @map("assignment_id")
+  key          String
+  createdAt    DateTime @default(now()) @map("created_at")
+
+  assignment AdminAssignment @relation(fields: [assignmentId], references: [id], onDelete: Cascade)
+
+  @@unique([assignmentId, key])
+  @@map("admin_permission_grants")
 }
 
 // ─── Profiles ────────────────────────────────────────────────────────────────
@@ -571,14 +690,20 @@ model FleetRegion {
   id             String   @id @default(uuid())
   fleetCompanyId String   @map("fleet_company_id")
   name           String
+  provinceId     String?  @map("province_id")
+  geoCityId      String?  @map("geo_city_id")
   createdAt      DateTime @default(now()) @map("created_at")
 
-  fleetCompany FleetCompany      @relation(fields: [fleetCompanyId], references: [id], onDelete: Cascade)
-  memberships  FleetMembership[]
-  invites      FleetInvite[]
-  drivers      DriverProfile[]
+  fleetCompany     FleetCompany      @relation(fields: [fleetCompanyId], references: [id], onDelete: Cascade)
+  province         Province?         @relation(fields: [provinceId], references: [id])
+  geoCity          City?             @relation(fields: [geoCityId], references: [id])
+  memberships      FleetMembership[]
+  invites          FleetInvite[]
+  drivers          DriverProfile[]
 
   @@index([fleetCompanyId])
+  @@index([provinceId])
+  @@index([geoCityId])
   @@map("fleet_regions")
 }
 

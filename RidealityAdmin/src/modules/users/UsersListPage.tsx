@@ -1,6 +1,6 @@
-import { useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { useMutation, useQuery } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   Alert,
   Box,
@@ -32,37 +32,62 @@ import {
 import { getApiErrorMessage } from '@/api/client';
 import CreateUserDialog from '@/modules/users/CreateUserDialog';
 import CreatePlatformStaffDialog from '@/modules/users/CreatePlatformStaffDialog';
+import EditPlatformStaffDialog from '@/modules/users/EditPlatformStaffDialog';
 import ConfirmDialog from '@/components/ConfirmDialog';
 import DataTable, { type DataTableColumn } from '@/components/DataTable';
 import PageHeader from '@/components/PageHeader';
 import { useDebounce } from '@/hooks/useDebounce';
+import { useAdminScope } from '@/hooks/useAdminScope';
 import { useAuth } from '@/hooks/useAuth';
 import { usePermissions } from '@/hooks/usePermissions';
 import { useNotify } from '@/services/notification';
 import { copyToClipboard } from '@/utils/clipboard';
-import type { UserListItem } from '@/api/types';
-import { formatDate, formatLabel } from '@/utils/format';
+import type { AdminRole, UserListItem } from '@/api/types';
+import { formatDate, formatLabel, formatAdminRole } from '@/utils/format';
 import { PLATFORM_ROLES } from '@/utils/permissions';
 
 const STATUS_OPTIONS = ['ACTIVE', 'SUSPENDED', 'BANNED', 'PENDING'];
 
 const STAFF_TABS: { value: 'ALL' | PlatformStaffType; label: string }[] = [
   { value: 'ALL', label: 'All' },
+  { value: 'GLOBAL_ADMIN', label: 'Global' },
+  { value: 'CONTINENT_ADMIN', label: 'Continent' },
+  { value: 'COUNTRY_ADMIN', label: 'Country' },
+  { value: 'REGIONAL_ADMIN', label: 'Region Head' },
+  { value: 'CITY_ADMIN', label: 'City' },
   { value: 'SUB_ADMIN', label: 'Sub Admin' },
   { value: 'FLEET_OWNER', label: 'Fleet Owner' },
+  { value: 'REGIONAL_FLEET', label: 'Regional Fleet' },
+  { value: 'FLEET_FINANCE', label: 'Fleet Finance' },
+  { value: 'FLEET_SUPPORT', label: 'Fleet Support' },
   { value: 'FINANCE_USER', label: 'Finance User' },
   { value: 'PLATFORM_SUPPORT', label: 'Platform Support' },
 ];
 
 function staffTypeLabel(type: PlatformStaffType) {
-  return STAFF_TABS.find((t) => t.value === type)?.label ?? formatLabel(type);
+  return formatAdminRole(type);
 }
 
 function PlatformStaffList() {
   const navigate = useNavigate();
   const notify = useNotify();
+  const queryClient = useQueryClient();
   const { user: currentUser } = useAuth();
+  const {
+    canCreateStaff,
+    listableStaffRoles,
+    isFleetOwner,
+    isRegionalFleet,
+    isFleetSupport,
+    isFleetFinance,
+  } = useAdminScope();
+  const isFleetTeamRole = isFleetOwner || isRegionalFleet || isFleetSupport || isFleetFinance;
+  const visibleTabs = useMemo(
+    () => STAFF_TABS.filter((t) => t.value === 'ALL' || listableStaffRoles.includes(t.value as AdminRole)),
+    [listableStaffRoles],
+  );
   const [createOpen, setCreateOpen] = useState(false);
+  const [editUserId, setEditUserId] = useState<string | null>(null);
   const [page, setPage] = useState(0);
   const [rowsPerPage, setRowsPerPage] = useState(20);
   const [search, setSearch] = useState('');
@@ -72,6 +97,10 @@ function PlatformStaffList() {
     null,
   );
   const debouncedSearch = useDebounce(search);
+
+  useEffect(() => {
+    if (!visibleTabs.some((t) => t.value === type)) setType('ALL');
+  }, [visibleTabs, type]);
 
   const { data, isLoading } = useQuery({
     queryKey: ['platform-staff', page, rowsPerPage, debouncedSearch, type],
@@ -110,8 +139,14 @@ function PlatformStaffList() {
     {
       id: 'staffType',
       label: 'Type',
-      width: '14%',
+      width: '12%',
       render: (r) => <Chip size="small" label={staffTypeLabel(r.staffType)} />,
+    },
+    {
+      id: 'scopeLabel',
+      label: 'Scope',
+      width: '16%',
+      render: (r) => r.scopeLabel || '—',
     },
     {
       id: 'fleets',
@@ -124,21 +159,29 @@ function PlatformStaffList() {
       id: 'actions',
       label: 'Actions',
       align: 'right',
-      width: 140,
+      width: 220,
       nowrap: false,
       render: (r) =>
-        r.id !== currentUser?.id && r.email ? (
-          <Button
-            size="small"
-            variant="outlined"
-            color="warning"
-            onClick={(e) => {
-              e.stopPropagation();
-              setResetTarget(r);
-            }}
-          >
-            Reset
-          </Button>
+        r.id !== currentUser?.id ? (
+          <Box sx={{ display: 'flex', justifyContent: 'flex-end', gap: 1 }} onClick={(e) => e.stopPropagation()}>
+            <Button
+              size="small"
+              variant="outlined"
+              onClick={() => setEditUserId(r.id)}
+            >
+              Edit
+            </Button>
+            {r.email ? (
+              <Button
+                size="small"
+                variant="outlined"
+                color="warning"
+                onClick={() => setResetTarget(r)}
+              >
+                Reset
+              </Button>
+            ) : null}
+          </Box>
         ) : null,
     },
   ];
@@ -146,26 +189,40 @@ function PlatformStaffList() {
   return (
     <>
       <PageHeader
-        title="Platform Users"
-        subtitle="Super Admin creates Sub Admins, Fleet Owners, Finance Users, and Platform Support"
+        title={isFleetTeamRole ? 'Fleet Team' : 'Platform Users'}
+        subtitle={
+          isFleetOwner
+            ? 'Invite Regional Fleet, Fleet Finance, and Fleet Support for your company'
+            : isRegionalFleet
+              ? 'Invite Fleet Support for your city'
+              : isFleetTeamRole
+                ? 'Team members in your fleet'
+                : 'Invite down the ladder: Global → Continent → Country → Regional → City → Fleet Owner'
+        }
         actions={
-          <Button variant="contained" startIcon={<AddIcon />} onClick={() => setCreateOpen(true)}>
-            Create user
-          </Button>
+          canCreateStaff ? (
+            <Button variant="contained" startIcon={<AddIcon />} onClick={() => setCreateOpen(true)}>
+              Create user
+            </Button>
+          ) : undefined
         }
       />
-      <Tabs
-        value={type}
-        onChange={(_, v: 'ALL' | PlatformStaffType) => {
-          setType(v);
-          setPage(0);
-        }}
-        sx={{ mb: 2 }}
-      >
-        {STAFF_TABS.map((t) => (
-          <Tab key={t.value} value={t.value} label={t.label} />
-        ))}
-      </Tabs>
+      {visibleTabs.length > 1 ? (
+        <Tabs
+          value={visibleTabs.some((t) => t.value === type) ? type : 'ALL'}
+          variant="scrollable"
+          scrollButtons="auto"
+          onChange={(_, v: 'ALL' | PlatformStaffType) => {
+            setType(v);
+            setPage(0);
+          }}
+          sx={{ mb: 2 }}
+        >
+          {visibleTabs.map((t) => (
+            <Tab key={t.value} value={t.value} label={t.label} />
+          ))}
+        </Tabs>
+      ) : null}
       <Box sx={{ display: 'flex', gap: 2, mb: 2, flexWrap: 'wrap' }}>
         <TextField
           size="small"
@@ -201,11 +258,20 @@ function PlatformStaffList() {
       />
       <CreatePlatformStaffDialog
         open={createOpen}
-        defaultType={type === 'ALL' ? 'SUB_ADMIN' : type}
+        defaultType={type === 'ALL' ? undefined : type}
         onClose={() => setCreateOpen(false)}
         onCreated={({ userId, companyId }) => {
           if (companyId) navigate(`/fleet/${companyId}`);
           else navigate(`/users/${userId}`);
+        }}
+      />
+      <EditPlatformStaffDialog
+        open={Boolean(editUserId)}
+        userId={editUserId}
+        onClose={() => setEditUserId(null)}
+        onUpdated={() => {
+          queryClient.invalidateQueries({ queryKey: ['platform-staff'] });
+          if (editUserId) queryClient.invalidateQueries({ queryKey: ['user', editUserId] });
         }}
       />
 
@@ -312,7 +378,28 @@ function PlatformStaffList() {
 
 export default function UsersListPage() {
   const navigate = useNavigate();
+  const { user } = useAuth();
   const { can, isSuperAdmin } = usePermissions();
+  const staffAdminRoles: AdminRole[] = [
+    'SUPER_ADMIN',
+    'GLOBAL_ADMIN',
+    'CONTINENT_ADMIN',
+    'COUNTRY_ADMIN',
+    'REGIONAL_ADMIN',
+    'CITY_ADMIN',
+    'SUB_ADMIN',
+    'FINANCE_USER',
+    'PLATFORM_SUPPORT',
+    'FLEET_OWNER',
+    'REGIONAL_FLEET',
+    'FLEET_FINANCE',
+    'FLEET_SUPPORT',
+  ];
+  const showStaffList =
+    isSuperAdmin ||
+    (user?.adminRole != null && staffAdminRoles.includes(user.adminRole)) ||
+    can('ADMIN_VIEW') ||
+    can('ADMIN_CREATE');
   const [createOpen, setCreateOpen] = useState(false);
   const [page, setPage] = useState(0);
   const [rowsPerPage, setRowsPerPage] = useState(20);
@@ -331,10 +418,10 @@ export default function UsersListPage() {
         status: status || undefined,
         role: role || undefined,
       }),
-    enabled: !isSuperAdmin,
+    enabled: !showStaffList,
   });
 
-  if (isSuperAdmin) return <PlatformStaffList />;
+  if (showStaffList) return <PlatformStaffList />;
 
   const columns: DataTableColumn<UserListItem>[] = [
     { id: 'fullName', label: 'Name', width: '16%', render: (r) => r.fullName ?? '—' },

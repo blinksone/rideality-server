@@ -19,22 +19,20 @@ import FleetRegionsPage from '@/fleet-portal/pages/FleetRegionsPage';
 import FleetCityProfilePage from '@/fleet-portal/pages/FleetCityProfilePage';
 import CompanyCreatePage from '@/modules/fleet/CompanyCreatePage';
 import { useFleetAccessTier } from '@/hooks/useFleetPortalMode';
-import { fleetPath } from '@/fleet-portal/fleetNavConfig';
+import { fleetLandingSegment, fleetPath } from '@/fleet-portal/fleetNavConfig';
+import type { FleetAccessTier } from '@/api/types';
 
-function OwnerBlocked({ children }: { children: React.ReactNode }) {
+function TierGuard({
+  allow,
+  children,
+}: {
+  allow: FleetAccessTier[];
+  children: React.ReactNode;
+}) {
   const { companyId = '' } = useParams();
   const tier = useFleetAccessTier(companyId);
-  if (tier === 'owner') {
-    return <Navigate to={fleetPath(companyId, 'regions')} replace />;
-  }
-  return <>{children}</>;
-}
-
-function OwnerOnly({ children }: { children: React.ReactNode }) {
-  const { companyId = '' } = useParams();
-  const tier = useFleetAccessTier(companyId);
-  if (tier && tier !== 'owner') {
-    return <Navigate to={fleetPath(companyId, 'drivers')} replace />;
+  if (tier && !allow.includes(tier)) {
+    return <Navigate to={fleetPath(companyId, fleetLandingSegment(tier))} replace />;
   }
   return <>{children}</>;
 }
@@ -48,100 +46,114 @@ export default function FleetPortalRoutes() {
         <Route
           path=":companyId/companies"
           element={
-            <OwnerOnly>
+            <TierGuard allow={['owner']}>
               <FleetCompanyPage />
-            </OwnerOnly>
+            </TierGuard>
           }
         />
         <Route
           path=":companyId/drivers"
           element={
-            <OwnerBlocked>
+            <TierGuard allow={['regional', 'support']}>
               <FleetDriversPage />
-            </OwnerBlocked>
+            </TierGuard>
           }
         />
-        <Route path=":companyId/regions" element={<FleetRegionsPage />} />
-        <Route path=":companyId/regions/:regionId" element={<FleetCityProfilePage />} />
+        <Route
+          path=":companyId/regions"
+          element={
+            <TierGuard allow={['owner']}>
+              <FleetRegionsPage />
+            </TierGuard>
+          }
+        />
+        <Route
+          path=":companyId/regions/:regionId"
+          element={
+            <TierGuard allow={['owner', 'regional', 'support']}>
+              <FleetCityProfilePage />
+            </TierGuard>
+          }
+        />
         <Route
           path=":companyId/vehicles"
           element={
-            <OwnerBlocked>
+            <TierGuard allow={['regional']}>
               <FleetVehiclesPage />
-            </OwnerBlocked>
+            </TierGuard>
           }
         />
         <Route
           path=":companyId/invitations"
           element={
-            <OwnerBlocked>
+            <TierGuard allow={['regional']}>
               <FleetInvitationsPage />
-            </OwnerBlocked>
+            </TierGuard>
           }
         />
         <Route
           path=":companyId/trips"
           element={
-            <OwnerBlocked>
+            <TierGuard allow={['regional', 'support']}>
               <FleetTripsPage />
-            </OwnerBlocked>
+            </TierGuard>
           }
         />
         <Route
           path=":companyId/wallet"
           element={
-            <OwnerOnly>
+            <TierGuard allow={['owner']}>
               <FleetWalletPage />
-            </OwnerOnly>
+            </TierGuard>
           }
         />
         <Route
           path=":companyId/transactions"
           element={
-            <OwnerOnly>
+            <TierGuard allow={['owner']}>
               <FleetTransactionsPage />
-            </OwnerOnly>
+            </TierGuard>
           }
         />
         <Route
           path=":companyId/earnings"
           element={
-            <OwnerOnly>
+            <TierGuard allow={['owner']}>
               <FleetEarningsPage />
-            </OwnerOnly>
+            </TierGuard>
           }
         />
         <Route
           path=":companyId/payouts"
           element={
-            <OwnerOnly>
+            <TierGuard allow={['owner']}>
               <FleetPayoutsPage />
-            </OwnerOnly>
+            </TierGuard>
           }
         />
         <Route
           path=":companyId/reports"
           element={
-            <OwnerOnly>
+            <TierGuard allow={['owner']}>
               <FleetReportsPage />
-            </OwnerOnly>
+            </TierGuard>
           }
         />
         <Route path=":companyId/notifications" element={<FleetNotificationsPage />} />
         <Route
           path=":companyId/team"
           element={
-            <OwnerOnly>
+            <TierGuard allow={['owner', 'regional']}>
               <FleetTeamPage />
-            </OwnerOnly>
+            </TierGuard>
           }
         />
         <Route
           path=":companyId/documents"
           element={
-            <OwnerBlocked>
+            <TierGuard allow={['regional']}>
               <FleetDocumentsPage />
-            </OwnerBlocked>
+            </TierGuard>
           }
         />
         <Route path=":companyId/settings" element={<FleetSettingsPage />} />

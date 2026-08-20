@@ -161,7 +161,7 @@ export async function assertFleetAccess(
   const membershipRegionId = membership?.fleetRegionId ?? null;
 
   let fleetRegionId: string | null = null;
-  if (isPlatformAdmin || tier === 'owner' || tier === 'support') {
+  if (isPlatformAdmin || tier === 'owner') {
     fleetRegionId = options?.fleetRegionId ?? null;
   } else {
     fleetRegionId = membershipRegionId;
@@ -170,7 +170,7 @@ export async function assertFleetAccess(
     }
   }
 
-  const canReviewDocuments = isPlatformAdmin || tier === 'regional' || tier === 'owner';
+  const canReviewDocuments = isPlatformAdmin || tier === 'regional';
   const canManageDriverOps = isPlatformAdmin || tier === 'regional' || tier === 'support' || tier === 'owner';
 
   return {
@@ -183,7 +183,7 @@ export async function assertFleetAccess(
     canReviewDocuments,
     canManageDriverOps,
     canInviteRegional: isPlatformAdmin || tier === 'owner',
-    canInviteSupport: isPlatformAdmin || tier === 'owner',
+    canInviteSupport: isPlatformAdmin || tier === 'regional',
   };
 }
 

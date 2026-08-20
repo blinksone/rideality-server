@@ -4,6 +4,29 @@ import { hashPassword } from '../src/utils/crypto';
 const prisma = new PrismaClient();
 
 async function main() {
+  const continents = [
+    { code: 'AF', name: 'Africa' },
+    { code: 'AN', name: 'Antarctica' },
+    { code: 'AS', name: 'Asia' },
+    { code: 'EU', name: 'Europe' },
+    { code: 'NA', name: 'North America' },
+    { code: 'OC', name: 'Oceania' },
+    { code: 'SA', name: 'South America' },
+  ];
+  const continentByCode = new Map<string, { id: string; code: string }>();
+  for (const row of continents) {
+    const continent = await prisma.continent.upsert({
+      where: { code: row.code },
+      create: row,
+      update: { name: row.name },
+    });
+    continentByCode.set(row.code, continent);
+  }
+  console.log('Continents seeded:', continents.map((c) => c.code).join(', '));
+
+  const asiaId = continentByCode.get('AS')!.id;
+  const naId = continentByCode.get('NA')!.id;
+
   const region = await prisma.region.upsert({
     where: { code: 'PK' },
     create: {
@@ -11,8 +34,9 @@ async function main() {
       name: 'Pakistan',
       currency: 'PKR',
       phonePrefix: '+92',
+      continentId: asiaId,
     },
-    update: {},
+    update: { continentId: asiaId },
   });
 
   console.log('Region seeded:', region.code);
@@ -24,11 +48,47 @@ async function main() {
       name: 'United States',
       currency: 'USD',
       phonePrefix: '+1',
+      continentId: naId,
     },
-    update: {},
+    update: { continentId: naId },
   });
 
   console.log('Region seeded:', usRegion.code);
+
+  for (const province of [
+    { name: 'Punjab', code: 'PB' },
+    { name: 'Sindh', code: 'SD' },
+    { name: 'Khyber Pakhtunkhwa', code: 'KP' },
+    { name: 'Balochistan', code: 'BA' },
+  ]) {
+    await prisma.province.upsert({
+      where: { countryId_name: { countryId: region.id, name: province.name } },
+      create: { countryId: region.id, name: province.name, code: province.code },
+      update: { code: province.code },
+    });
+  }
+  console.log('Pakistan provinces seeded');
+
+  const pkCities: Record<string, string[]> = {
+    Punjab: ['Lahore', 'Rawalpindi', 'Faisalabad', 'Multan', 'Gujranwala', 'Sialkot'],
+    Sindh: ['Karachi', 'Hyderabad', 'Sukkur', 'Larkana'],
+    'Khyber Pakhtunkhwa': ['Peshawar', 'Mardan', 'Abbottabad', 'Swat'],
+    Balochistan: ['Quetta', 'Gwadar', 'Turbat'],
+  };
+  for (const [provinceName, cityNames] of Object.entries(pkCities)) {
+    const province = await prisma.province.findUnique({
+      where: { countryId_name: { countryId: region.id, name: provinceName } },
+    });
+    if (!province) continue;
+    for (const name of cityNames) {
+      await prisma.city.upsert({
+        where: { provinceId_name: { provinceId: province.id, name } },
+        create: { provinceId: province.id, name },
+        update: {},
+      });
+    }
+  }
+  console.log('Pakistan cities seeded');
 
   const adminEmail = process.env.ADMIN_EMAIL ?? 'admin@rideality.com';
   const adminPassword = process.env.ADMIN_PASSWORD ?? 'Admin@123456';
@@ -83,6 +143,23 @@ async function main() {
   console.log('Admin user seeded:', adminEmail);
   console.log('Admin password:', adminPassword);
 
+  await prisma.adminAssignment.upsert({
+    where: { userId: admin.id },
+    create: {
+      userId: admin.id,
+      role: 'SUPER_ADMIN',
+      scopeType: 'PLATFORM',
+    },
+    update: {
+      role: 'SUPER_ADMIN',
+      scopeType: 'PLATFORM',
+      continentId: null,
+      countryId: null,
+      regionalId: null,
+      cityId: null,
+    },
+  });
+
   const { DEFAULT_PERMISSIONS, DEFAULT_ROLE_TEMPLATES } = await import('../src/constants/permissions');
 
   const permissionMap = new Map<string, string>();
@@ -121,6 +198,10 @@ async function main() {
     });
   }
   console.log('Roles seeded:', DEFAULT_ROLE_TEMPLATES.map((r) => r.slug).join(', '));
+
+  const { backfillAdminAssignments } = await import('../src/services/admin-scope.service');
+  const backfill = await backfillAdminAssignments();
+  console.log('Admin assignments backfilled:', backfill);
 }
 
 main()

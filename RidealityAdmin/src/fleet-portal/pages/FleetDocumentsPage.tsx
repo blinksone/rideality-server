@@ -16,7 +16,7 @@ import {
 import FolderIcon from '@mui/icons-material/Folder';
 import PendingActionsIcon from '@mui/icons-material/PendingActions';
 import CheckCircleIcon from '@mui/icons-material/CheckCircle';
-import { listFleetDocuments, reviewFleetDocument } from '@/api/fleet.api';
+import { approveFleetDocument, listFleetDocuments, rejectFleetDocument } from '@/api/fleet.api';
 import { getApiErrorMessage } from '@/api/client';
 import DataTable, { type DataTableColumn } from '@/components/DataTable';
 import FleetContentCard from '@/fleet-portal/components/FleetContentCard';
@@ -25,6 +25,7 @@ import FleetMetricCard from '@/fleet-portal/components/FleetMetricCard';
 import FleetMetricRow, { FleetMetricCell } from '@/fleet-portal/components/FleetMetricRow';
 import FleetPageHero from '@/fleet-portal/components/FleetPageHero';
 import { useActiveFleetMembership, useFleetAccessTier } from '@/hooks/useFleetPortalMode';
+import { useAdminScope } from '@/hooks/useAdminScope';
 import { useNotify } from '@/services/notification';
 import { formatDate, formatLabel } from '@/utils/format';
 import type { FleetDocument } from '@/api/fleet.api';
@@ -42,7 +43,8 @@ export default function FleetDocumentsPage() {
   const queryClient = useQueryClient();
   const membership = useActiveFleetMembership(companyId);
   const tier = useFleetAccessTier(companyId);
-  const canReview = tier === 'regional' || tier === 'owner';
+  const { isRegionalFleet } = useAdminScope();
+  const canReview = isRegionalFleet || tier === 'regional';
   const cityName = membership?.fleetRegionName;
   const [filters, setFilters] = useState<FleetFilterValues>({ search: '', status: '', from: '', to: '' });
   const [expiringOnly, setExpiringOnly] = useState(false);
@@ -73,7 +75,10 @@ export default function FleetDocumentsPage() {
       documentId: string;
       status: 'approved' | 'rejected';
       reason?: string;
-    }) => reviewFleetDocument(companyId, documentId, { status, rejectionReason: reason }),
+    }) =>
+      status === 'approved'
+        ? approveFleetDocument(documentId)
+        : rejectFleetDocument(documentId, reason ?? ''),
     onSuccess: () => {
       notify.success('Document updated');
       queryClient.invalidateQueries({ queryKey: ['fleet-documents', companyId] });
@@ -152,12 +157,12 @@ export default function FleetDocumentsPage() {
         description={
           canReview
             ? 'Approve or reject verification documents for drivers in your city. Open the file, then approve or reject with a reason.'
-            : 'View driver verification documents. Approve and reject is limited to fleet owner and regional fleet.'
+            : 'View driver verification documents. Approve and reject is limited to regional fleet for this city.'
         }
       />
       {!canReview && tier === 'support' && (
         <Alert severity="info" sx={{ mb: 2 }}>
-          You can view documents. Approve and reject is limited to fleet owner and regional fleet for this city.
+          You can view documents. Approve and reject is limited to regional fleet for this city.
         </Alert>
       )}
       {canReview && !cityName && (

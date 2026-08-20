@@ -1,6 +1,7 @@
 import { PlatformRole, Prisma } from '@prisma/client';
 import { prisma } from '../lib/prisma';
-import { PERMISSION_KEYS } from '../constants/permissions';
+import { PERMISSION_KEYS, expandPermissionAliases } from '../constants/permissions';
+import { assignmentPermissionKeys } from './admin-scope.service';
 import {
   ConflictError,
   ForbiddenError,
@@ -43,6 +44,7 @@ export async function resolveUserPermissionKeys(userId: string): Promise<string[
     where: { id: userId },
     include: {
       platformRoles: true,
+      adminAssignment: { include: { grants: true } },
       userRoles: {
         include: {
           role: {
@@ -58,12 +60,22 @@ export async function resolveUserPermissionKeys(userId: string): Promise<string[
 
   if (!user) return [];
 
-  if (user.platformRoles.some((r) => r.role === PlatformRole.SUPER_ADMIN)) {
+  if (
+    user.platformRoles.some((r) => r.role === PlatformRole.SUPER_ADMIN) ||
+    user.adminAssignment?.role === 'SUPER_ADMIN'
+  ) {
     const all = await prisma.permission.findMany({ select: { key: true } });
     return all.map((p) => p.key);
   }
 
   const keys = new Set<string>();
+
+  if (user.adminAssignment) {
+    assignmentPermissionKeys(
+      user.adminAssignment,
+      user.adminAssignment.grants.map((g) => g.key),
+    ).forEach((k) => keys.add(k));
+  }
 
   const platformDefaults: Partial<Record<PlatformRole, string[]>> = {
     [PlatformRole.FLEET_OWNER]: [
@@ -121,9 +133,11 @@ export async function resolveUserPermissionKeys(userId: string): Promise<string[
     ],
   };
 
-  for (const pr of user.platformRoles) {
-    const defaults = platformDefaults[pr.role];
-    if (defaults) defaults.forEach((k) => keys.add(k));
+  if (!user.adminAssignment) {
+    for (const pr of user.platformRoles) {
+      const defaults = platformDefaults[pr.role];
+      if (defaults) defaults.forEach((k) => keys.add(k));
+    }
   }
 
   for (const ur of user.userRoles) {
@@ -135,25 +149,27 @@ export async function resolveUserPermissionKeys(userId: string): Promise<string[
     keys.add(up.permission.key);
   }
 
-  const memberships = await prisma.fleetMembership.findMany({
-    where: { userId, status: 'active' },
-    select: { role: true },
-  });
-  for (const m of memberships) {
-    if (m.role === 'owner' || m.role === 'regional' || m.role === 'manager') {
-      keys.add(PERMISSION_KEYS.MANAGE_FLEETS);
-      keys.add(PERMISSION_KEYS.MANAGE_DRIVERS);
-      keys.add(PERMISSION_KEYS.MANAGE_DOCUMENTS);
-      keys.add(PERMISSION_KEYS.VIEW_REPORTS);
-    }
-    if (m.role === 'support' || m.role === 'dispatcher') {
-      keys.add(PERMISSION_KEYS.MANAGE_FLEETS);
-      keys.add(PERMISSION_KEYS.MANAGE_NOTES);
-      keys.add(PERMISSION_KEYS.VIEW_REPORTS);
+  if (!user.adminAssignment) {
+    const memberships = await prisma.fleetMembership.findMany({
+      where: { userId, status: 'active' },
+      select: { role: true },
+    });
+    for (const m of memberships) {
+      if (m.role === 'owner' || m.role === 'regional' || m.role === 'manager') {
+        keys.add(PERMISSION_KEYS.MANAGE_FLEETS);
+        keys.add(PERMISSION_KEYS.MANAGE_DRIVERS);
+        keys.add(PERMISSION_KEYS.MANAGE_DOCUMENTS);
+        keys.add(PERMISSION_KEYS.VIEW_REPORTS);
+      }
+      if (m.role === 'support' || m.role === 'dispatcher') {
+        keys.add(PERMISSION_KEYS.MANAGE_FLEETS);
+        keys.add(PERMISSION_KEYS.MANAGE_NOTES);
+        keys.add(PERMISSION_KEYS.VIEW_REPORTS);
+      }
     }
   }
 
-  return [...keys];
+  return expandPermissionAliases(keys);
 }
 
 // ─── Permissions catalog ─────────────────────────────────────────────────────

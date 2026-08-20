@@ -13,7 +13,19 @@ import type {
   UserStatus,
 } from '@/api/types';
 
-export type PlatformStaffType = 'SUB_ADMIN' | 'FLEET_OWNER' | 'FINANCE_USER' | 'PLATFORM_SUPPORT';
+export type PlatformStaffType =
+  | 'SUB_ADMIN'
+  | 'GLOBAL_ADMIN'
+  | 'CONTINENT_ADMIN'
+  | 'COUNTRY_ADMIN'
+  | 'REGIONAL_ADMIN'
+  | 'CITY_ADMIN'
+  | 'FLEET_OWNER'
+  | 'REGIONAL_FLEET'
+  | 'FLEET_FINANCE'
+  | 'FLEET_SUPPORT'
+  | 'FINANCE_USER'
+  | 'PLATFORM_SUPPORT';
 
 export interface PlatformStaffUser {
   id: string;
@@ -23,6 +35,7 @@ export interface PlatformStaffUser {
   fullName?: string | null;
   roles: string[];
   staffType: PlatformStaffType;
+  scopeLabel?: string | null;
   fleets: Array<{ id: string; legalName: string; status: string }>;
   createdAt: string;
 }
@@ -33,6 +46,9 @@ export interface CreatePlatformStaffPayload {
   email: string;
   fullName: string;
   regionId: string;
+  continentId?: string;
+  regionalId?: string;
+  cityId?: string;
   legalName?: string;
   taxId?: string;
 }
@@ -71,12 +87,30 @@ export async function listPlatformStaff(params: {
   return data;
 }
 
+export interface UpdatePlatformStaffPayload {
+  phone: string;
+  email: string;
+  fullName: string;
+  regionId: string;
+  continentId?: string;
+  regionalId?: string;
+  cityId?: string;
+}
+
 export async function createPlatformStaff(
   payload: CreatePlatformStaffPayload,
 ): Promise<UserDetail & { fleetCompany?: { id: string; legalName: string } }> {
   const { data } = await apiClient.post<
     ApiSuccess<UserDetail & { fleetCompany?: { id: string; legalName: string } }>
   >('/admin/portal/users', payload);
+  return data.data;
+}
+
+export async function updatePlatformStaff(
+  userId: string,
+  payload: UpdatePlatformStaffPayload,
+): Promise<UserDetail> {
+  const { data } = await apiClient.patch<ApiSuccess<UserDetail>>(`/admin/portal/users/${userId}`, payload);
   return data.data;
 }
 
@@ -227,5 +261,36 @@ export async function revokePlatformRole(
   const { data } = await apiClient.delete<ApiSuccess<UserAccess>>(
     `/admin/users/${userId}/platform-roles/${platformRole}`,
   );
+  return data.data;
+}
+
+export async function listRegionalFleets(fleetOwnerUserId: string) {
+  const { data } = await apiClient.get<
+    ApiSuccess<{
+      parent: { userId: string; role: string; countryId: string | null };
+      regionalFleets: Array<{
+        userId: string;
+        fullName: string | null;
+        email: string | null;
+        phone: string;
+        city: { id: string; name: string } | null;
+      }>;
+    }>
+  >(`/admin/fleet-owners/${fleetOwnerUserId}/regional-fleets`);
+  return data.data;
+}
+
+export async function listFleetSupportStaff(regionalFleetUserId: string) {
+  const { data } = await apiClient.get<
+    ApiSuccess<{
+      parent: { userId: string; role: string; cityId: string | null };
+      support: Array<{
+        userId: string;
+        fullName: string | null;
+        email: string | null;
+        phone: string;
+      }>;
+    }>
+  >(`/admin/regional-fleets/${regionalFleetUserId}/support`);
   return data.data;
 }
