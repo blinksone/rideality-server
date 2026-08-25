@@ -15,7 +15,10 @@ import adminPortalRoutes from './routes/admin.portal.routes';
 import adminRegionRoutes from './routes/admin.region.routes';
 import adminFleetRoutes from './routes/admin.fleet.routes';
 import adminFinanceRoutes from './routes/admin.finance.routes';
+import adminFareRoutes from './routes/admin.fare.routes';
+import adminPlacesRoutes from './routes/admin.places.routes';
 import fleetRoutes from './routes/fleet.routes';
+import placesRoutes from './routes/places.routes';
 import internalFinanceRoutes from './routes/internal.finance.routes';
 import tripRoutes from './routes/trip.routes';
 import bookingRoutes from './routes/booking.routes';
@@ -68,8 +71,11 @@ export function createApp() {
   api.use('/admin/regions', adminRegionRoutes);
   api.use('/admin/fleets', adminFleetRoutes);
   api.use('/admin/finance', adminFinanceRoutes);
+  api.use('/admin/fares', adminFareRoutes);
+  api.use('/admin/places', adminPlacesRoutes);
   api.use('/internal/finance', internalFinanceRoutes);
   api.use('/fleet', fleetRoutes);
+  api.use('/places', placesRoutes);
 
   app.use(env.API_PREFIX, api);
   app.use(notFoundHandler);

@@ -870,6 +870,23 @@ function inferAssignment(user: {
     };
   }
 
+  const finance = user.fleetMemberships.find((m) => m.role === 'finance');
+  if (finance) {
+    const cityId =
+      finance.fleetRegionId ??
+      finance.fleetRegion?.id ??
+      finance.fleetCompany.fleetRegions[0]?.id ??
+      null;
+    return {
+      role: 'FLEET_FINANCE',
+      continentId: finance.fleetCompany.region.continentId,
+      countryId: finance.fleetCompany.regionId,
+      regionalId: finance.fleetRegion?.provinceId ?? finance.fleetCompany.fleetRegions[0]?.provinceId ?? null,
+      cityId,
+      invitedByUserId: finance.invitedByUserId,
+    };
+  }
+
   return null;
 }
 

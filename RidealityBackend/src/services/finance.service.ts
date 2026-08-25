@@ -1,4 +1,6 @@
 import {
+  FleetMemberRole,
+  FleetMemberStatus,
   PlatformRole,
   Prisma,
   PayoutRequestStatus,
@@ -7,11 +9,15 @@ import {
   WalletOwnerType,
   WalletStatus,
   WalletTransactionType,
+  FleetNotificationType,
+  TopupMethod,
 } from '@prisma/client';
 import { prisma } from '../lib/prisma';
 import { ForbiddenError, NotFoundError, ValidationError } from '../utils/errors';
+import type { AdminAssignmentRecord } from './admin-scope.service';
 import {
   ensureFleetWallet,
+  ensurePlatformWallet,
   ensureUserWallet,
   formatTransaction,
   formatWallet,
@@ -20,6 +26,7 @@ import {
   postLedgerEntry,
   setWalletStatus,
 } from './wallet.service';
+import { assertFleetAccess as assertFleetMembership } from './fleet-access';
 
 async function assertFleetAccess(fleetCompanyId: string, userId: string, roles: PlatformRole[]) {
   if (roles.includes(PlatformRole.SUPER_ADMIN) || roles.includes(PlatformRole.ADMIN)) {
@@ -36,6 +43,90 @@ async function assertFleetAccess(fleetCompanyId: string, userId: string, roles: 
   if (!fleet) {
     throw new ForbiddenError('Fleet access denied');
   }
+}
+
+export type FinanceActor = {
+  userId: string;
+  roles: PlatformRole[];
+  assignment?: AdminAssignmentRecord | null;
+};
+
+function andWalletWhere(
+  base: Prisma.WalletWhereInput,
+  extra?: Prisma.WalletWhereInput,
+): Prisma.WalletWhereInput {
+  if (!extra || Object.keys(extra).length === 0) return base;
+  if (Object.keys(base).length === 0) return extra;
+  return { AND: [base, extra] };
+}
+
+async function ownedFleetCompanyIds(userId: string): Promise<string[]> {
+  const companies = await prisma.fleetCompany.findMany({
+    where: {
+      OR: [
+        { ownerUserId: userId },
+        {
+          memberships: {
+            some: {
+              userId,
+              status: FleetMemberStatus.active,
+              role: FleetMemberRole.owner,
+            },
+          },
+        },
+      ],
+    },
+    select: { id: true },
+  });
+  return companies.map((row) => row.id);
+}
+
+/** Restrict platform finance lists so Fleet Owner cannot see other fleets or city-admin wallets. */
+export async function resolveFinanceWalletWhere(actor: FinanceActor): Promise<Prisma.WalletWhereInput> {
+  const role = actor.assignment?.role ?? null;
+  const unrestricted =
+    actor.roles.includes(PlatformRole.SUPER_ADMIN) ||
+    role === 'SUPER_ADMIN' ||
+    role === 'GLOBAL_ADMIN' ||
+    role === 'SUB_ADMIN' ||
+    role === 'FINANCE_USER';
+  if (unrestricted) return {};
+
+  const isFleetOwner = role === 'FLEET_OWNER' || actor.roles.includes(PlatformRole.FLEET_OWNER);
+  if (isFleetOwner) {
+    const ids = await ownedFleetCompanyIds(actor.userId);
+    if (!ids.length) return { id: { in: [] } };
+    return {
+      OR: [
+        { fleetCompanyId: { in: ids } },
+        { user: { driverProfile: { fleetCompanyId: { in: ids } } } },
+      ],
+    };
+  }
+
+  if (actor.assignment?.scopeType === 'CITY') {
+    throw new ForbiddenError('Forbidden: outside your assigned scope');
+  }
+  if (actor.assignment?.scopeType === 'COUNTRY' && actor.assignment.countryId) {
+    return { regionId: actor.assignment.countryId };
+  }
+  if (actor.assignment?.scopeType === 'REGIONAL' && actor.assignment.countryId) {
+    return { regionId: actor.assignment.countryId };
+  }
+  if (actor.assignment?.scopeType === 'CONTINENT' && actor.assignment.continentId) {
+    return { region: { continentId: actor.assignment.continentId } };
+  }
+
+  return { id: { in: [] } };
+}
+
+export async function assertFinanceWalletAccess(actor: FinanceActor, walletId: string) {
+  const access = await resolveFinanceWalletWhere(actor);
+  const wallet = await prisma.wallet.findFirst({
+    where: andWalletWhere({ id: walletId }, access),
+    select: { id: true },
+  });
+  if (!wallet) throw new ForbiddenError('Forbidden: outside your assigned scope');
 }
 
 function formatAdjustment(row: {
@@ -182,9 +273,11 @@ function formatPayout(row: {
   };
 }
 
-export async function getFinanceSummary() {
+export async function getFinanceSummary(accessWhere: Prisma.WalletWhereInput = {}) {
   const startOfToday = new Date();
   startOfToday.setHours(0, 0, 0, 0);
+  const txWhere: Prisma.WalletTransactionWhereInput = { wallet: accessWhere };
+  const since24h = new Date(Date.now() - 24 * 60 * 60 * 1000);
 
   const [
     walletCounts,
@@ -200,40 +293,42 @@ export async function getFinanceSummary() {
   ] = await Promise.all([
       prisma.wallet.groupBy({
         by: ['ownerType'],
+        where: accessWhere,
         _count: { _all: true },
         _sum: { balance: true },
       }),
       prisma.wallet.groupBy({
         by: ['currency'],
+        where: accessWhere,
         _count: { _all: true },
         _sum: { balance: true },
         orderBy: { currency: 'asc' },
       }),
-      prisma.walletAdjustment.count({ where: { status: WalletAdjustmentStatus.pending } }),
-      prisma.payoutRequest.count({ where: { status: PayoutRequestStatus.pending } }),
+      prisma.walletAdjustment.count({
+        where: { status: WalletAdjustmentStatus.pending, wallet: accessWhere },
+      }),
+      prisma.payoutRequest.count({
+        where: { status: PayoutRequestStatus.pending, wallet: accessWhere },
+      }),
       prisma.walletTransaction.aggregate({
         _sum: { amount: true },
-        where: {
-          createdAt: { gte: new Date(Date.now() - 24 * 60 * 60 * 1000) },
-        },
+        where: { ...txWhere, createdAt: { gte: since24h } },
       }),
       prisma.walletTransaction.groupBy({
         by: ['currency'],
         _sum: { amount: true },
-        where: {
-          createdAt: { gte: new Date(Date.now() - 24 * 60 * 60 * 1000) },
-        },
+        where: { ...txWhere, createdAt: { gte: since24h } },
         orderBy: { currency: 'asc' },
       }),
-      prisma.wallet.count(),
-      prisma.wallet.count({ where: { balance: { lt: 0 } } }),
+      prisma.wallet.count({ where: accessWhere }),
+      prisma.wallet.count({ where: andWalletWhere({ balance: { lt: 0 } }, accessWhere) }),
       prisma.wallet.aggregate({
-        where: { status: WalletStatus.frozen },
+        where: andWalletWhere({ status: WalletStatus.frozen }, accessWhere),
         _count: { _all: true },
         _sum: { balance: true },
       }),
       prisma.walletTransaction.count({
-        where: { createdAt: { gte: startOfToday } },
+        where: { ...txWhere, createdAt: { gte: startOfToday } },
       }),
     ]);
 
@@ -278,35 +373,36 @@ export async function listWallets(query: {
   updatedFrom?: string;
   updatedTo?: string;
   ids?: string;
+  accessWhere?: Prisma.WalletWhereInput;
 }) {
-  const where: Prisma.WalletWhereInput = {};
+  const filters: Prisma.WalletWhereInput = {};
 
   if (query.ids) {
     const idList = query.ids.split(',').map((s) => s.trim()).filter(Boolean);
-    if (idList.length) where.id = { in: idList };
+    if (idList.length) filters.id = { in: idList };
   }
 
-  if (query.ownerType) where.ownerType = query.ownerType;
-  if (query.regionId) where.regionId = query.regionId;
-  if (query.continentId) where.region = { continentId: query.continentId };
-  if (query.status) where.status = query.status;
-  if (query.fleetCompanyId) where.fleetCompanyId = query.fleetCompanyId;
-  if (query.currency) where.currency = query.currency;
+  if (query.ownerType) filters.ownerType = query.ownerType;
+  if (query.regionId) filters.regionId = query.regionId;
+  if (query.continentId) filters.region = { continentId: query.continentId };
+  if (query.status) filters.status = query.status;
+  if (query.fleetCompanyId) filters.fleetCompanyId = query.fleetCompanyId;
+  if (query.currency) filters.currency = query.currency;
 
   if (query.balanceMin !== undefined || query.balanceMax !== undefined) {
-    where.balance = {};
-    if (query.balanceMin !== undefined) where.balance.gte = query.balanceMin;
-    if (query.balanceMax !== undefined) where.balance.lte = query.balanceMax;
+    filters.balance = {};
+    if (query.balanceMin !== undefined) filters.balance.gte = query.balanceMin;
+    if (query.balanceMax !== undefined) filters.balance.lte = query.balanceMax;
   }
 
   if (query.updatedFrom || query.updatedTo) {
-    where.updatedAt = {};
-    if (query.updatedFrom) where.updatedAt.gte = new Date(query.updatedFrom);
-    if (query.updatedTo) where.updatedAt.lte = new Date(query.updatedTo);
+    filters.updatedAt = {};
+    if (query.updatedFrom) filters.updatedAt.gte = new Date(query.updatedFrom);
+    if (query.updatedTo) filters.updatedAt.lte = new Date(query.updatedTo);
   }
 
   if (query.search) {
-    where.OR = [
+    filters.OR = [
       { user: { email: { contains: query.search, mode: 'insensitive' } } },
       { user: { phone: { contains: query.search } } },
       { user: { profile: { fullName: { contains: query.search, mode: 'insensitive' } } } },
@@ -314,6 +410,8 @@ export async function listWallets(query: {
       { id: { contains: query.search, mode: 'insensitive' } },
     ];
   }
+
+  const where = andWalletWhere(filters, query.accessWhere);
 
   const skip = (query.page - 1) * query.limit;
   const [wallets, total] = await Promise.all([
@@ -398,25 +496,28 @@ const walletLookupInclude = {
   region: { select: { id: true, code: true, name: true } },
 } as const;
 
-export async function lookupWalletsByEmail(email: string) {
+export async function lookupWalletsByEmail(email: string, accessWhere: Prisma.WalletWhereInput = {}) {
   const normalized = email.trim().toLowerCase();
   if (!normalized) throw new ValidationError('Email is required');
 
   const wallets = await prisma.wallet.findMany({
-    where: {
-      OR: [
-        {
-          ownerType: WalletOwnerType.user,
-          user: { email: { equals: normalized, mode: 'insensitive' } },
-        },
-        {
-          ownerType: WalletOwnerType.fleet,
-          fleetCompany: {
-            owner: { email: { equals: normalized, mode: 'insensitive' } },
+    where: andWalletWhere(
+      {
+        OR: [
+          {
+            ownerType: WalletOwnerType.user,
+            user: { email: { equals: normalized, mode: 'insensitive' } },
           },
-        },
-      ],
-    },
+          {
+            ownerType: WalletOwnerType.fleet,
+            fleetCompany: {
+              owner: { email: { equals: normalized, mode: 'insensitive' } },
+            },
+          },
+        ],
+      },
+      accessWhere,
+    ),
     include: walletLookupInclude,
     orderBy: [{ ownerType: 'asc' }, { updatedAt: 'desc' }],
   });
@@ -429,10 +530,12 @@ export async function listAdjustments(query: {
   limit: number;
   status?: WalletAdjustmentStatus;
   walletId?: string;
+  accessWhere?: Prisma.WalletWhereInput;
 }) {
   const where: Prisma.WalletAdjustmentWhereInput = {};
   if (query.status) where.status = query.status;
   if (query.walletId) where.walletId = query.walletId;
+  if (query.accessWhere && Object.keys(query.accessWhere).length) where.wallet = query.accessWhere;
 
   const skip = (query.page - 1) * query.limit;
   const [rows, total] = await Promise.all([
@@ -466,10 +569,12 @@ export async function listPayouts(query: {
   limit: number;
   status?: PayoutRequestStatus;
   walletId?: string;
+  accessWhere?: Prisma.WalletWhereInput;
 }) {
   const where: Prisma.PayoutRequestWhereInput = {};
   if (query.status) where.status = query.status;
   if (query.walletId) where.walletId = query.walletId;
+  if (query.accessWhere && Object.keys(query.accessWhere).length) where.wallet = query.accessWhere;
 
   const skip = (query.page - 1) * query.limit;
   const [rows, total] = await Promise.all([
@@ -503,10 +608,12 @@ export async function listGlobalTransactions(query: {
   limit: number;
   walletId?: string;
   type?: WalletTransactionType;
+  accessWhere?: Prisma.WalletWhereInput;
 }) {
   const where: Prisma.WalletTransactionWhereInput = {};
   if (query.walletId) where.walletId = query.walletId;
   if (query.type) where.type = query.type;
+  if (query.accessWhere && Object.keys(query.accessWhere).length) where.wallet = query.accessWhere;
 
   const skip = (query.page - 1) * query.limit;
   const [rows, total] = await Promise.all([
@@ -1087,6 +1194,7 @@ export async function exportWalletsCsv(query: {
   updatedFrom?: string;
   updatedTo?: string;
   ids?: string;
+  accessWhere?: Prisma.WalletWhereInput;
 }) {
   const { wallets } = await listWallets({ ...query, page: 1, limit: 10000 });
   const header = [
@@ -1150,7 +1258,9 @@ export async function addWalletNote(actorId: string, walletId: string, content: 
 export { getWalletById, listWalletTransactions, setWalletStatus };
 
 /**
- * Capture passenger payment + credit driver earnings for a completed ride.
+ * Capture passenger payment and split completed-ride proceeds:
+ *   platform = bookingFee + commission% × (fare − bookingFee)
+ *   fleet/driver = remainder
  * Idempotent per ride via ledger idempotency keys.
  */
 export async function captureRideFare(input: {
@@ -1165,15 +1275,95 @@ export async function captureRideFare(input: {
     return { applied: false, reason: 'zero_amount' as const };
   }
 
-  await ensureUserWallet(passengerUserId, input.currency);
-  await ensureUserWallet(driverUserId, input.currency);
+  const ride = await prisma.ride.findUnique({
+    where: { id: rideId },
+    include: {
+      passenger: { select: { regionId: true } },
+      driver: {
+        select: {
+          driverProfile: {
+            select: { fleetCompanyId: true, commissionRateOverride: true },
+          },
+        },
+      },
+      fleetCompany: {
+        select: {
+          id: true,
+          regionId: true,
+          fleetTakePercent: true,
+          region: { select: { currency: true } },
+        },
+      },
+    },
+  });
 
+  const bookingFeeRaw = Number(ride?.bookingFee ?? 0);
+  let commissionPercent = Number(ride?.platformCommissionPercent ?? 0);
+  if (commissionPercent === 0 && ride?.passenger?.regionId) {
+    const region = await prisma.region.findUnique({
+      where: { id: ride.passenger.regionId },
+      select: { platformCommissionPercent: true },
+    });
+    commissionPercent = Number(region?.platformCommissionPercent ?? 0);
+  }
+
+  const split = splitCompletedRideFare(amount, bookingFeeRaw, commissionPercent);
+  const fleetCompanyId = ride?.fleetCompanyId ?? ride?.driver?.driverProfile?.fleetCompanyId ?? null;
+  const regionId = ride?.passenger?.regionId ?? ride?.fleetCompany?.regionId ?? null;
+  const operatorSplit = splitOperatorShare(
+    split.operatorShare,
+    ride && fleetCompanyId ? resolveFleetTakePercent(ride) : 0,
+  );
+
+  await ensureUserWallet(passengerUserId, input.currency);
   const passengerWallet = await prisma.wallet.findUniqueOrThrow({
     where: { userId: passengerUserId },
   });
-  const driverWallet = await prisma.wallet.findUniqueOrThrow({
-    where: { userId: driverUserId },
-  });
+
+  let fleetWalletId: string | null = null;
+  let driverWalletId: string | null = null;
+  if (split.operatorShare > 0) {
+    if (fleetCompanyId && operatorSplit.fleetShare > 0) {
+      const fleet =
+        ride?.fleetCompany ??
+        (await prisma.fleetCompany.findUnique({
+          where: { id: fleetCompanyId },
+          select: {
+            id: true,
+            regionId: true,
+            fleetTakePercent: true,
+            region: { select: { currency: true } },
+          },
+        }));
+      if (!fleet) throw new NotFoundError('Fleet company not found');
+      await ensureFleetWallet(
+        fleetCompanyId,
+        fleet.regionId,
+        fleet.region?.currency ?? input.currency,
+      );
+      const fleetWallet = await prisma.wallet.findUniqueOrThrow({
+        where: { fleetCompanyId },
+      });
+      fleetWalletId = fleetWallet.id;
+    }
+
+    if (operatorSplit.driverShare > 0) {
+      await ensureUserWallet(driverUserId, input.currency);
+      const driverWallet = await prisma.wallet.findUniqueOrThrow({
+        where: { userId: driverUserId },
+      });
+      driverWalletId = driverWallet.id;
+    }
+  }
+
+  let platformWalletId: string | null = null;
+  if (split.platformTotal > 0) {
+    if (!regionId) {
+      throw new ValidationError('Cannot credit platform commission without a region');
+    }
+    const platformWallet = await ensurePlatformWallet(regionId, input.currency);
+    platformWalletId = platformWallet.id;
+  }
 
   return prisma.$transaction(async (tx) => {
     const debit = await postLedgerEntry(
@@ -1186,22 +1376,91 @@ export async function captureRideFare(input: {
         referenceId: rideId,
         idempotencyKey: `ride_payment:${rideId}`,
         allowNegative: true,
+        metadata: {
+          bookingFee: split.bookingFee,
+          platformCommission: split.platformCommission,
+          platformTotal: split.platformTotal,
+          operatorShare: split.operatorShare,
+          platformCommissionPercent: split.commissionPercent,
+          fleetTakePercent: operatorSplit.fleetTakePercent,
+          fleetShare: operatorSplit.fleetShare,
+          driverShare: operatorSplit.driverShare,
+        },
       },
       tx,
     );
 
-    const credit = await postLedgerEntry(
-      {
-        walletId: driverWallet.id,
-        type: WalletTransactionType.ride_earnings,
-        amount,
-        description: `Trip earnings ${rideId}`,
-        referenceType: 'ride',
-        referenceId: rideId,
-        idempotencyKey: `ride_earnings:${rideId}`,
-      },
-      tx,
-    );
+    let commissionTxId: string | null = null;
+    let commissionDuplicate = false;
+    if (platformWalletId && split.platformTotal > 0) {
+      const commission = await postLedgerEntry(
+        {
+          walletId: platformWalletId,
+          type: WalletTransactionType.commission,
+          amount: split.platformTotal,
+          description: `Trip commission ${rideId}`,
+          referenceType: 'ride',
+          referenceId: rideId,
+          idempotencyKey: `ride_commission:${rideId}`,
+          metadata: {
+            bookingFee: split.bookingFee,
+            commission: split.platformCommission,
+            percent: split.commissionPercent,
+          },
+        },
+        tx,
+      );
+      commissionTxId = commission.transaction.id;
+      commissionDuplicate = Boolean(commission.duplicate);
+    }
+
+    let fleetCreditTxId: string | null = null;
+    let fleetCreditDuplicate = false;
+    if (fleetWalletId && operatorSplit.fleetShare > 0) {
+      const fleetCredit = await postLedgerEntry(
+        {
+          walletId: fleetWalletId,
+          type: WalletTransactionType.ride_earnings,
+          amount: operatorSplit.fleetShare,
+          description: `Fleet trip share ${rideId}`,
+          referenceType: 'ride',
+          referenceId: rideId,
+          idempotencyKey: `ride_fleet_earnings:${rideId}`,
+          metadata: {
+            fleetCompanyId,
+            driverUserId,
+            fleetTakePercent: operatorSplit.fleetTakePercent,
+          },
+        },
+        tx,
+      );
+      fleetCreditTxId = fleetCredit.transaction.id;
+      fleetCreditDuplicate = Boolean(fleetCredit.duplicate);
+    }
+
+    let creditTxId: string | null = null;
+    let creditDuplicate = false;
+    if (driverWalletId && operatorSplit.driverShare > 0) {
+      const credit = await postLedgerEntry(
+        {
+          walletId: driverWalletId,
+          type: WalletTransactionType.ride_earnings,
+          amount: operatorSplit.driverShare,
+          description: `Trip earnings ${rideId}`,
+          referenceType: 'ride',
+          referenceId: rideId,
+          idempotencyKey: `ride_earnings:${rideId}`,
+          metadata: {
+            fleetCompanyId,
+            driverUserId,
+            fleetTakePercent: operatorSplit.fleetTakePercent,
+          },
+        },
+        tx,
+      );
+      creditTxId = credit.transaction.id;
+      creditDuplicate = Boolean(credit.duplicate);
+    }
 
     await tx.auditLog.create({
       data: {
@@ -1211,10 +1470,22 @@ export async function captureRideFare(input: {
         details: {
           rideId,
           amount,
+          bookingFee: split.bookingFee,
+          platformCommission: split.platformCommission,
+          platformTotal: split.platformTotal,
+          operatorShare: split.operatorShare,
+          fleetTakePercent: operatorSplit.fleetTakePercent,
+          fleetShare: operatorSplit.fleetShare,
+          driverShare: operatorSplit.driverShare,
+          fleetCompanyId,
           debitTx: debit.transaction.id,
-          creditTx: credit.transaction.id,
+          commissionTx: commissionTxId,
+          fleetCreditTx: fleetCreditTxId,
+          creditTx: creditTxId,
           debitDuplicate: debit.duplicate,
-          creditDuplicate: credit.duplicate,
+          commissionDuplicate,
+          fleetCreditDuplicate,
+          creditDuplicate,
         },
       },
     });
@@ -1222,11 +1493,73 @@ export async function captureRideFare(input: {
     return {
       applied: true as const,
       amount,
+      bookingFee: split.bookingFee,
+      platformTotal: split.platformTotal,
+      operatorShare: split.operatorShare,
+      fleetShare: operatorSplit.fleetShare,
+      driverShare: operatorSplit.driverShare,
       debitTransactionId: debit.transaction.id,
-      creditTransactionId: credit.transaction.id,
-      duplicate: Boolean(debit.duplicate || credit.duplicate),
+      commissionTransactionId: commissionTxId,
+      fleetCreditTransactionId: fleetCreditTxId,
+      creditTransactionId: creditTxId,
+      duplicate: Boolean(
+        debit.duplicate || commissionDuplicate || fleetCreditDuplicate || creditDuplicate,
+      ),
     };
   });
+}
+
+function money(value: number): number {
+  return Math.round(Number(value) * 100) / 100;
+}
+
+/** Platform keeps booking fee + % of the remaining fare; fleet/driver gets the rest. */
+export function splitCompletedRideFare(
+  amount: number,
+  bookingFee: number,
+  commissionPercent: number,
+) {
+  const fare = money(Math.max(0, amount));
+  const fee = money(Math.min(Math.max(0, bookingFee), fare));
+  const percent = Math.min(100, Math.max(0, commissionPercent));
+  const commissionable = money(fare - fee);
+  const platformCommission = money(commissionable * (percent / 100));
+  const platformTotal = money(Math.min(fare, fee + platformCommission));
+  const operatorShare = money(fare - platformTotal);
+  return {
+    bookingFee: fee,
+    commissionPercent: percent,
+    platformCommission,
+    platformTotal,
+    operatorShare,
+  };
+}
+
+/** Fleet keeps fleetTakePercent of operator share; driver gets the remainder. */
+export function splitOperatorShare(operatorShare: number, fleetTakePercent: number) {
+  const net = money(Math.max(0, operatorShare));
+  const percent = Math.min(100, Math.max(0, fleetTakePercent));
+  const fleetShare = money(net * (percent / 100));
+  const driverShare = money(net - fleetShare);
+  return { fleetTakePercent: percent, fleetShare, driverShare };
+}
+
+function resolveFleetTakePercent(ride: {
+  fleetTakePercent?: { toNumber?: () => number } | number | null;
+  driver?: {
+    driverProfile?: {
+      commissionRateOverride?: { toNumber?: () => number } | number | null;
+    } | null;
+  } | null;
+  fleetCompany?: {
+    fleetTakePercent?: { toNumber?: () => number } | number | null;
+  } | null;
+}): number {
+  const snap = Number(ride.fleetTakePercent ?? 0);
+  if (snap > 0) return snap;
+  const override = ride.driver?.driverProfile?.commissionRateOverride;
+  if (override != null && Number(override) > 0) return Number(override);
+  return Number(ride.fleetCompany?.fleetTakePercent ?? 0);
 }
 
 /**
@@ -1280,5 +1613,191 @@ export async function refundRidePayment(input: {
     transactionId: ledger.transaction.id,
     duplicate: ledger.duplicate,
   };
+}
+
+const driverCreditInclude = {
+  wallet: {
+    include: {
+      user: { include: { profile: true } },
+      fleetCompany: true,
+    },
+  },
+  requestedBy: { include: { profile: true } },
+  reviewedBy: { include: { profile: true } },
+} as const;
+
+function formatDriverCredit(row: Parameters<typeof formatAdjustment>[0] & {
+  wallet?: {
+    user?: {
+      id?: string;
+      phone?: string;
+      profile?: { fullName: string | null } | null;
+      email?: string | null;
+    } | null;
+  };
+}) {
+  const base = formatAdjustment(row);
+  return {
+    ...base,
+    driverUserId: row.wallet?.user && 'id' in row.wallet.user ? row.wallet.user.id ?? null : null,
+    driverPhone: row.wallet?.user && 'phone' in row.wallet.user ? row.wallet.user.phone ?? null : null,
+  };
+}
+
+async function fleetDriverWalletIds(companyId: string, fleetRegionId: string | null) {
+  const drivers = await prisma.driverProfile.findMany({
+    where: {
+      fleetCompanyId: companyId,
+      ...(fleetRegionId ? { fleetRegionId } : {}),
+    },
+    select: { userId: true },
+  });
+  const wallets = await prisma.wallet.findMany({
+    where: { userId: { in: drivers.map((d) => d.userId) } },
+    select: { id: true },
+  });
+  return wallets.map((w) => w.id);
+}
+
+/** Fleet Finance requests a credit to a driver wallet; Fleet Owner must approve before it posts. */
+export async function requestFleetDriverCredit(
+  companyId: string,
+  actorId: string,
+  data: {
+    driverUserId: string;
+    amount: number;
+    reason: string;
+    topupMethod: TopupMethod | string;
+    externalRef?: string;
+  },
+) {
+  const access = await assertFleetMembership(companyId, actorId);
+  if (!access.canRequestDriverCredit) {
+    throw new ForbiddenError('Only fleet finance can request driver credits');
+  }
+
+  const driver = await prisma.driverProfile.findFirst({
+    where: {
+      userId: data.driverUserId,
+      fleetCompanyId: companyId,
+      ...(access.fleetRegionId ? { fleetRegionId: access.fleetRegionId } : {}),
+    },
+    include: {
+      user: { select: { id: true, region: { select: { currency: true } }, profile: { select: { fullName: true } } } },
+    },
+  });
+  if (!driver) throw new NotFoundError('Driver not found in this fleet city');
+
+  const wallet = await ensureUserWallet(driver.userId, driver.user.region.currency);
+  const adjustment = await prisma.walletAdjustment.create({
+    data: {
+      walletId: wallet.id,
+      direction: WalletAdjustmentDirection.credit,
+      amount: data.amount,
+      currency: wallet.currency,
+      reason: data.reason,
+      topupMethod: data.topupMethod as TopupMethod,
+      externalRef: data.externalRef,
+      requestedById: actorId,
+      status: WalletAdjustmentStatus.pending,
+    },
+    include: driverCreditInclude,
+  });
+
+  const company = await prisma.fleetCompany.findUnique({
+    where: { id: companyId },
+    select: { ownerUserId: true },
+  });
+  if (company?.ownerUserId) {
+    const driverName = driver.user.profile?.fullName ?? 'A driver';
+    await prisma.fleetNotification.create({
+      data: {
+        fleetCompanyId: companyId,
+        userId: company.ownerUserId,
+        type: FleetNotificationType.payout_status,
+        title: 'Driver credit awaiting approval',
+        body: `${driverName}: ${data.amount} ${wallet.currency} via ${String(data.topupMethod).replace('_', ' ')}. ${data.reason}`,
+        metadata: { adjustmentId: adjustment.id, driverUserId: driver.userId },
+      },
+    });
+  }
+
+  await prisma.auditLog.create({
+    data: {
+      actorId,
+      fleetCompanyId: companyId,
+      action: 'fleet.driver_credit.requested',
+      details: {
+        adjustmentId: adjustment.id,
+        driverUserId: driver.userId,
+        amount: data.amount,
+        topupMethod: data.topupMethod,
+      },
+    },
+  });
+
+  return formatDriverCredit(adjustment);
+}
+
+export async function listFleetDriverCredits(
+  companyId: string,
+  actorId: string,
+  query: { status?: 'pending' | 'approved' | 'rejected'; page: number; limit: number },
+) {
+  const access = await assertFleetMembership(companyId, actorId);
+  if (!access.canRequestDriverCredit && !access.canReviewDriverCredit) {
+    throw new ForbiddenError('You cannot view driver credits for this fleet');
+  }
+
+  const walletIds = await fleetDriverWalletIds(companyId, access.fleetRegionId);
+  const where: Prisma.WalletAdjustmentWhereInput = {
+    walletId: { in: walletIds.length ? walletIds : ['__none__'] },
+    direction: WalletAdjustmentDirection.credit,
+    ...(query.status ? { status: query.status } : {}),
+  };
+
+  const [rows, total] = await Promise.all([
+    prisma.walletAdjustment.findMany({
+      where,
+      orderBy: { createdAt: 'desc' },
+      skip: (query.page - 1) * query.limit,
+      take: query.limit,
+      include: driverCreditInclude,
+    }),
+    prisma.walletAdjustment.count({ where }),
+  ]);
+
+  return { credits: rows.map(formatDriverCredit), total };
+}
+
+export async function reviewFleetDriverCredit(
+  companyId: string,
+  actorId: string,
+  actorRoles: PlatformRole[],
+  adjustmentId: string,
+  action: 'approve' | 'reject',
+  reviewNote?: string,
+) {
+  const access = await assertFleetMembership(companyId, actorId);
+  if (!access.canReviewDriverCredit) {
+    throw new ForbiddenError('Only the fleet owner can approve or reject driver credits');
+  }
+
+  const adjustment = await prisma.walletAdjustment.findUnique({
+    where: { id: adjustmentId },
+    include: { wallet: { select: { userId: true } } },
+  });
+  if (!adjustment) throw new NotFoundError('Credit request not found');
+
+  const driver = await prisma.driverProfile.findFirst({
+    where: {
+      userId: adjustment.wallet.userId ?? '__none__',
+      fleetCompanyId: companyId,
+    },
+    select: { userId: true },
+  });
+  if (!driver) throw new ForbiddenError('This credit is not for a driver in your fleet');
+
+  return reviewWalletAdjustment(actorId, actorRoles, adjustmentId, action, reviewNote);
 }
 

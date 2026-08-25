@@ -107,7 +107,7 @@ function coverageBlurb(assignment: NonNullable<UserDetail['adminAssignment']>, r
     case 'FLEET_SUPPORT':
       return `Fleet support for ${area}. Handles tickets and driver assistance in this city.`;
     case 'FLEET_FINANCE':
-      return `Fleet finance for ${area}.`;
+      return `Fleet finance for ${area}. Credits driver wallets (cash/bank) for the owner to approve.`;
     case 'FLEET_OWNER':
       return `Owns and operates the fleet covering ${area}.`;
     case 'CITY_ADMIN':

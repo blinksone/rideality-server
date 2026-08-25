@@ -82,6 +82,13 @@ enum LocationLabel {
   custom
 }
 
+enum PlaceSource {
+  ADMIN
+  GOOGLE
+  USER
+  SYSTEM
+}
+
 enum DocumentType {
   national_id
   passport
@@ -96,6 +103,17 @@ enum DocumentStatus {
   approved
   rejected
   expired
+}
+
+enum FareProduct {
+  ride
+  cargo
+}
+
+/// Rider-facing class: Taxi tab vs Delivery tab.
+enum ServiceFamily {
+  taxi
+  cargo
 }
 
 enum FleetCompanyStatus {
@@ -114,6 +132,8 @@ enum FleetMemberRole {
   regional
   /// Region-scoped fleet support (FLEET_SUPPORT).
   support
+  /// City-scoped fleet accountant (FLEET_FINANCE).
+  finance
 }
 
 enum FleetMemberStatus {
@@ -274,14 +294,16 @@ model Continent {
 }
 
 model Region {
-  id           String   @id @default(uuid())
-  code         String   @unique
-  name         String
-  currency     String   @default("PKR")
-  phonePrefix  String   @map("phone_prefix")
-  isActive     Boolean  @default(true) @map("is_active")
-  continentId  String?  @map("continent_id")
-  createdAt    DateTime @default(now()) @map("created_at")
+  id                         String   @id @default(uuid())
+  code                       String   @unique
+  name                       String
+  currency                   String   @default("PKR")
+  phonePrefix                String   @map("phone_prefix")
+  isActive                   Boolean  @default(true) @map("is_active")
+  continentId                String?  @map("continent_id")
+  /// Super Admin: % of (fare − booking fee) kept by the platform on completed rides.
+  platformCommissionPercent  Decimal  @default(0) @map("platform_commission_percent") @db.Decimal(5, 2)
+  createdAt                  DateTime @default(now()) @map("created_at")
 
   continent        Continent?        @relation(fields: [continentId], references: [id])
   provinces        Province[]
@@ -289,6 +311,7 @@ model Region {
   fleetCompanies   FleetCompany[]
   wallets          Wallet[]
   adminAssignments AdminAssignment[]
+  fareConfigs      FareConfig[]
 
   @@index([continentId])
   @@map("regions")
@@ -322,10 +345,57 @@ model City {
   province         Province          @relation(fields: [provinceId], references: [id], onDelete: Cascade)
   fleetRegions     FleetRegion[]
   adminAssignments AdminAssignment[]
+  fareConfigs      FareConfig[]
 
   @@unique([provinceId, name])
   @@index([provinceId])
   @@map("cities")
+}
+
+/// Platform catalog of rider-facing products (Bike, Economy, AC, Cargo).
+model ServiceProduct {
+  code           String        @id
+  label          String
+  family         ServiceFamily
+  sortOrder      Int           @default(0) @map("sort_order")
+  isActive       Boolean       @default(true) @map("is_active")
+  /// Used when this product has no FareConfig row yet (relative to Economy / ride tariff).
+  fareMultiplier Decimal       @default(1) @map("fare_multiplier") @db.Decimal(6, 3)
+  createdAt      DateTime      @default(now()) @map("created_at")
+
+  fareConfigs         FareConfig[]
+  fleetRegionServices FleetRegionService[]
+
+  @@map("service_products")
+}
+
+/// Marketplace tariff for a geo city, or a country-wide default when cityId is null.
+model FareConfig {
+  id                 String      @id @default(uuid())
+  countryId          String      @map("country_id")
+  cityId             String?     @map("city_id")
+  product            FareProduct
+  /// Catalog code: bike | rickshaw | economy | ac | cargo.
+  serviceProductCode String?     @map("service_product_code")
+  currency           String
+  baseFare        Decimal     @map("base_fare") @db.Decimal(12, 2)
+  perKm           Decimal     @map("per_km") @db.Decimal(12, 4)
+  perMinute       Decimal     @map("per_minute") @db.Decimal(12, 4)
+  minimumFare     Decimal     @map("minimum_fare") @db.Decimal(12, 2)
+  bookingFee      Decimal     @map("booking_fee") @db.Decimal(12, 2)
+  cancellationFee Decimal     @default(0) @map("cancellation_fee") @db.Decimal(12, 2)
+  cargoPerKg      Decimal     @default(0) @map("cargo_per_kg") @db.Decimal(12, 4)
+  createdAt       DateTime    @default(now()) @map("created_at")
+  updatedAt       DateTime    @updatedAt @map("updated_at")
+
+  country        Region          @relation(fields: [countryId], references: [id], onDelete: Cascade)
+  city           City?           @relation(fields: [cityId], references: [id], onDelete: Cascade)
+  serviceProduct ServiceProduct? @relation(fields: [serviceProductCode], references: [code])
+
+  @@index([countryId, product])
+  @@index([cityId, product])
+  @@index([serviceProductCode])
+  @@map("fare_configs")
 }
 
 // ─── User (identity root) ────────────────────────────────────────────────────
@@ -351,6 +421,7 @@ model User {
   driverProfile     DriverProfile?
   platformRoles     UserPlatformRole[]
   savedLocations    SavedLocation[]
+  placeUsages       PlaceUsage[]
   documents         VerificationDocument[]
   devices           UserDevice[]
   consents          ConsentRecord[]
@@ -577,6 +648,7 @@ model DriverProfile {
   /// Which request types this driver will accept while online: rides | cargo
   serviceModes           String[]               @default(["rides"]) @map("service_modes")
   incentiveTier          LoyaltyTier            @default(basic) @map("incentive_tier")
+  /// Optional per-driver override of FleetCompany.fleetTakePercent (0–100).
   commissionRateOverride Decimal?               @map("commission_rate_override") @db.Decimal(5, 2)
   totalRides             Int                    @default(0) @map("total_rides")
   totalDistanceKm        Decimal                @default(0) @map("total_distance_km") @db.Decimal(10, 2)
@@ -607,6 +679,47 @@ model SavedLocation {
 
   @@unique([userId, label])
   @@map("saved_locations")
+}
+
+/// Shared pickup/dropoff catalog. Nearby lists come from here; Google search is upserted on select.
+model Place {
+  id                String      @id @default(uuid())
+  name              String
+  formattedAddress  String?     @map("formatted_address")
+  latitude          Decimal     @db.Decimal(10, 7)
+  longitude         Decimal     @db.Decimal(10, 7)
+  city              String?
+  area              String?
+  type              String?
+  googlePlaceId     String?     @unique @map("google_place_id")
+  source            PlaceSource @default(GOOGLE)
+  priority          Int         @default(0)
+  usageCount        Int         @default(0) @map("usage_count")
+  lastUsedAt        DateTime?   @map("last_used_at")
+  isActive          Boolean     @default(true) @map("is_active")
+  createdAt         DateTime    @default(now()) @map("created_at")
+  updatedAt         DateTime    @updatedAt @map("updated_at")
+
+  usages PlaceUsage[]
+
+  @@index([isActive, city])
+  @@index([latitude, longitude])
+  @@index([usageCount])
+  @@map("places")
+}
+
+model PlaceUsage {
+  id        String   @id @default(uuid())
+  userId    String   @map("user_id")
+  placeId   String   @map("place_id")
+  usedAt    DateTime @default(now()) @map("used_at")
+
+  user  User  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  place Place @relation(fields: [placeId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, placeId])
+  @@index([userId, usedAt])
+  @@map("place_usages")
 }
 
 // ─── Vehicle ─────────────────────────────────────────────────────────────────
@@ -662,11 +775,17 @@ model FleetCompany {
   id           String             @id @default(uuid())
   legalName    String             @map("legal_name")
   taxId        String?            @map("tax_id")
+  phone        String?
+  email        String?
+  address      String?
+  logoUrl      String?            @map("logo_url")
   regionId     String             @map("region_id")
   ownerUserId  String             @map("owner_user_id")
   status       FleetCompanyStatus @default(pending)
   /// Shown to fleet staff when status is pending or suspended (required for suspended).
   statusReason String?            @map("status_reason")
+  /// Fleet Owner: % of operator share (after platform cut) kept by the fleet. Driver gets the rest. 0–100.
+  fleetTakePercent Decimal        @default(0) @map("fleet_take_percent") @db.Decimal(5, 2)
   createdAt    DateTime           @default(now()) @map("created_at")
   updatedAt    DateTime           @updatedAt @map("updated_at")
 
@@ -700,11 +819,27 @@ model FleetRegion {
   memberships      FleetMembership[]
   invites          FleetInvite[]
   drivers          DriverProfile[]
+  services         FleetRegionService[]
 
   @@index([fleetCompanyId])
   @@index([provinceId])
   @@index([geoCityId])
   @@map("fleet_regions")
+}
+
+/// Fleet owner opt-in: which catalog products this city actually runs.
+model FleetRegionService {
+  id            String  @id @default(uuid())
+  fleetRegionId String  @map("fleet_region_id")
+  productCode   String  @map("product_code")
+  enabled       Boolean @default(true)
+
+  fleetRegion FleetRegion    @relation(fields: [fleetRegionId], references: [id], onDelete: Cascade)
+  product     ServiceProduct @relation(fields: [productCode], references: [code], onDelete: Cascade)
+
+  @@unique([fleetRegionId, productCode])
+  @@index([productCode])
+  @@map("fleet_region_services")
 }
 
 model FleetMembership {
@@ -775,6 +910,12 @@ model Ride {
   dropoffProofType CargoDropoffConfirmationType? @map("dropoff_proof_type")
   fare            Decimal     @default(0) @db.Decimal(12, 2)
   fareEstimate    Decimal?    @map("fare_estimate") @db.Decimal(12, 2)
+  /// Snapshot at quote time so settlement is stable if Super Admin later changes the tariff.
+  bookingFee      Decimal     @default(0) @map("booking_fee") @db.Decimal(12, 2)
+  /// Snapshot of Region.platformCommissionPercent at quote time (0–100).
+  platformCommissionPercent Decimal @default(0) @map("platform_commission_percent") @db.Decimal(5, 2)
+  /// Snapshot of fleet take % of operator share at accept time (0–100).
+  fleetTakePercent Decimal    @default(0) @map("fleet_take_percent") @db.Decimal(5, 2)
   distanceKm      Decimal     @default(0) @map("distance_km") @db.Decimal(10, 2)
   currency        String      @default("PKR")
   vehicleType     String?     @map("vehicle_type") @db.VarChar(32)

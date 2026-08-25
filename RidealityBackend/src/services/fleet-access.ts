@@ -1,15 +1,15 @@
-import { FleetCompanyStatus, FleetMemberRole, FleetMemberStatus, PlatformRole } from '@prisma/client';
+import { AdminRole, FleetCompanyStatus, FleetMemberRole, FleetMemberStatus, PlatformRole } from '@prisma/client';
 import { prisma } from '../lib/prisma';
 import { ConflictError, ForbiddenError } from '../utils/errors';
 
 /** Canonical membership tiers after mapping legacy manager/dispatcher. */
-export type FleetAccessTier = 'owner' | 'regional' | 'support';
+export type FleetAccessTier = 'owner' | 'regional' | 'support' | 'finance';
 
 export type FleetAccessContext = {
   userId: string;
   companyId: string;
   isPlatformAdmin: boolean;
-  /** owner | regional | support | null (platform admin with no membership) */
+  /** owner | regional | support | finance | null (platform admin with no membership) */
   tier: FleetAccessTier | null;
   membershipId: string | null;
   /** Region this actor is locked to. Null = whole company (owner / platform admin). */
@@ -17,6 +17,9 @@ export type FleetAccessContext = {
   canReviewDocuments: boolean;
   /** Drivers, vehicles, and driver invites — regional / support, not country owner. */
   canManageDriverOps: boolean;
+  canViewDrivers: boolean;
+  canRequestDriverCredit: boolean;
+  canReviewDriverCredit: boolean;
   canInviteRegional: boolean;
   canInviteSupport: boolean;
 };
@@ -25,6 +28,7 @@ const STAFF_ROLES: FleetMemberRole[] = [
   FleetMemberRole.owner,
   FleetMemberRole.regional,
   FleetMemberRole.support,
+  FleetMemberRole.finance,
   FleetMemberRole.manager,
   FleetMemberRole.dispatcher,
 ];
@@ -38,6 +42,116 @@ const STAFF_PLATFORM_ROLES: PlatformRole[] = [
   PlatformRole.SUB_ADMIN,
   PlatformRole.FINANCE_OFFICER,
 ];
+
+const ASSIGNMENT_TO_MEMBER_ROLE: Partial<Record<AdminRole, FleetMemberRole>> = {
+  FLEET_FINANCE: FleetMemberRole.finance,
+  FLEET_SUPPORT: FleetMemberRole.support,
+  REGIONAL_FLEET: FleetMemberRole.regional,
+};
+
+async function findFleetCompanyForActor(actorId: string) {
+  const owned = await prisma.fleetCompany.findFirst({
+    where: { ownerUserId: actorId },
+    orderBy: { createdAt: 'desc' },
+  });
+  if (owned) return owned;
+  const membership = await prisma.fleetMembership.findFirst({
+    where: { userId: actorId, status: FleetMemberStatus.active },
+    include: { fleetCompany: true },
+    orderBy: { createdAt: 'desc' },
+  });
+  return membership?.fleetCompany ?? null;
+}
+
+async function ensureFleetRegionForGeoCity(companyId: string, geoCityId: string) {
+  const existing = await prisma.fleetRegion.findFirst({
+    where: { fleetCompanyId: companyId, geoCityId },
+  });
+  if (existing) return existing;
+  const city = await prisma.city.findUnique({ where: { id: geoCityId } });
+  if (!city) return null;
+  return prisma.fleetRegion.create({
+    data: {
+      fleetCompanyId: companyId,
+      name: city.name,
+      provinceId: city.provinceId,
+      geoCityId: city.id,
+    },
+  });
+}
+
+/**
+ * Existing Fleet Finance / Support / Regional users were invited before membership
+ * was written. Attach them to the inviter's company so the fleet portal can open.
+ */
+export async function ensureFleetStaffMembershipFromAssignment(userId: string) {
+  const assignment = await prisma.adminAssignment.findUnique({
+    where: { userId },
+    include: { invitedBy: true },
+  });
+  if (!assignment) return;
+  const memberRole = ASSIGNMENT_TO_MEMBER_ROLE[assignment.role];
+  if (!memberRole) return;
+
+  const existing = await prisma.fleetMembership.findFirst({
+    where: { userId, status: FleetMemberStatus.active, role: { in: STAFF_ROLES } },
+  });
+  if (existing) {
+    if (existing.role !== memberRole && existing.role !== FleetMemberRole.owner) {
+      await prisma.fleetMembership.update({
+        where: { id: existing.id },
+        data: { role: memberRole },
+      });
+    }
+    return;
+  }
+
+  const inviterUserId = assignment.invitedBy?.userId ?? null;
+  let company = inviterUserId ? await findFleetCompanyForActor(inviterUserId) : null;
+  if (!company && assignment.countryId && assignment.cityId) {
+    const matches = await prisma.fleetCompany.findMany({
+      where: {
+        regionId: assignment.countryId,
+        status: FleetCompanyStatus.active,
+        fleetRegions: { some: { geoCityId: assignment.cityId } },
+      },
+      take: 2,
+    });
+    if (matches.length === 1) company = matches[0];
+  }
+  if (!company) return;
+
+  let fleetRegionId: string | null = null;
+  if (assignment.cityId) {
+    const region = await ensureFleetRegionForGeoCity(company.id, assignment.cityId);
+    fleetRegionId = region?.id ?? null;
+  }
+  if (!fleetRegionId) {
+    const first = await prisma.fleetRegion.findFirst({
+      where: { fleetCompanyId: company.id },
+      orderBy: { createdAt: 'asc' },
+    });
+    fleetRegionId = first?.id ?? null;
+  }
+
+  await prisma.fleetMembership.upsert({
+    where: { fleetCompanyId_userId: { fleetCompanyId: company.id, userId } },
+    create: {
+      fleetCompanyId: company.id,
+      userId,
+      role: memberRole,
+      fleetRegionId,
+      invitedByUserId: inviterUserId,
+      status: FleetMemberStatus.active,
+    },
+    update: {
+      role: memberRole,
+      status: FleetMemberStatus.active,
+      ...(fleetRegionId ? { fleetRegionId } : {}),
+      invitedByUserId: inviterUserId,
+    },
+  });
+}
 
 /** Prisma `user` filter: hide fleet/platform staff from driver rosters. */
 export function notStaffDriverUserFilter(companyId: string) {
@@ -83,6 +197,7 @@ export async function assertCanOnboardAsDriver(userId: string) {
 export function normalizeMemberRole(role: FleetMemberRole): FleetAccessTier {
   if (role === FleetMemberRole.owner) return 'owner';
   if (role === FleetMemberRole.regional || role === FleetMemberRole.manager) return 'regional';
+  if (role === FleetMemberRole.finance) return 'finance';
   return 'support';
 }
 
@@ -172,6 +287,14 @@ export async function assertFleetAccess(
 
   const canReviewDocuments = isPlatformAdmin || tier === 'regional';
   const canManageDriverOps = isPlatformAdmin || tier === 'regional' || tier === 'support' || tier === 'owner';
+  const canViewDrivers =
+    isPlatformAdmin ||
+    tier === 'regional' ||
+    tier === 'support' ||
+    tier === 'finance' ||
+    tier === 'owner';
+  const canRequestDriverCredit = isPlatformAdmin || tier === 'finance';
+  const canReviewDriverCredit = isPlatformAdmin || tier === 'owner';
 
   return {
     userId,
@@ -182,6 +305,9 @@ export async function assertFleetAccess(
     fleetRegionId,
     canReviewDocuments,
     canManageDriverOps,
+    canViewDrivers,
+    canRequestDriverCredit,
+    canReviewDriverCredit,
     canInviteRegional: isPlatformAdmin || tier === 'owner',
     canInviteSupport: isPlatformAdmin || tier === 'regional',
   };
@@ -196,6 +322,12 @@ export async function assertFleetOwner(companyId: string, userId: string): Promi
 }
 
 export async function listMyFleetMemberships(userId: string) {
+  try {
+    await ensureFleetStaffMembershipFromAssignment(userId);
+  } catch {
+    // Login /me must still succeed if backfill cannot resolve a company.
+  }
+
   const memberships = await prisma.fleetMembership.findMany({
     where: { userId, status: FleetMemberStatus.active },
     include: {

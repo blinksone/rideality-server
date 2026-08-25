@@ -7,6 +7,7 @@ import {
   FleetMemberStatus,
   FleetNotificationType,
   PlatformRole,
+  Prisma,
   UserStatus,
 } from '@prisma/client';
 import { prisma } from '../lib/prisma';
@@ -110,7 +111,40 @@ async function ensureFleetRegionForGeoCity(companyId: string, geoCityId: string)
   });
 }
 
-export async function listPublicFleetCompanies(query?: { regionId?: string; regionCode?: string }) {
+export async function listPublicSignupCities(regionId: string) {
+  const country = await prisma.region.findFirst({
+    where: { id: regionId, isActive: true },
+    select: { id: true },
+  });
+  if (!country) return [];
+
+  return prisma.city.findMany({
+    where: {
+      province: { countryId: regionId },
+      fleetRegions: {
+        some: {
+          fleetCompany: { status: FleetCompanyStatus.active, regionId },
+        },
+      },
+    },
+    orderBy: { name: 'asc' },
+    select: {
+      id: true,
+      name: true,
+      provinceId: true,
+      province: { select: { id: true, name: true } },
+    },
+  });
+}
+
+export async function listPublicFleetCompanies(query?: {
+  regionId?: string;
+  regionCode?: string;
+  cityId?: string;
+  search?: string;
+  sort?: 'top' | 'name';
+  limit?: number;
+}) {
   let regionId = query?.regionId;
   if (!regionId && query?.regionCode) {
     const region = await prisma.region.findFirst({
@@ -121,20 +155,225 @@ export async function listPublicFleetCompanies(query?: { regionId?: string; regi
     regionId = region.id;
   }
 
+  const limit = query?.limit ?? 20;
   const companies = await prisma.fleetCompany.findMany({
     where: {
       status: FleetCompanyStatus.active,
       ...(regionId ? { regionId } : {}),
+      ...(query?.search
+        ? { legalName: { contains: query.search, mode: 'insensitive' } }
+        : {}),
+      ...(query?.cityId
+        ? { fleetRegions: { some: { geoCityId: query.cityId } } }
+        : {}),
     },
     orderBy: { legalName: 'asc' },
+    take: 80,
     select: {
       id: true,
       legalName: true,
+      phone: true,
+      email: true,
+      address: true,
+      logoUrl: true,
       regionId: true,
       region: { select: { id: true, code: true, name: true } },
+      owner: { select: { phone: true } },
+      fleetRegions: query?.cityId
+        ? {
+            where: { geoCityId: query.cityId },
+            take: 1,
+            select: { id: true, name: true },
+          }
+        : false,
     },
   });
-  return companies;
+
+  const cards = await attachPublicCompanyStats(
+    companies.map((company) => ({
+      id: company.id,
+      legalName: company.legalName,
+      phone: company.phone ?? company.owner.phone,
+      email: company.email,
+      address: company.address,
+      logoUrl: company.logoUrl,
+      regionId: company.regionId,
+      region: company.region,
+      fleetRegionId: company.fleetRegions?.[0]?.id ?? null,
+      fleetRegionName: company.fleetRegions?.[0]?.name ?? null,
+    })),
+    query?.cityId,
+  );
+
+  const sort = query?.sort ?? (query?.cityId ? 'top' : 'name');
+  if (sort === 'top') {
+    cards.sort((a, b) => {
+      if (b.driverCount !== a.driverCount) return b.driverCount - a.driverCount;
+      if (b.ratingAvg !== a.ratingAvg) return b.ratingAvg - a.ratingAvg;
+      return a.legalName.localeCompare(b.legalName);
+    });
+  }
+
+  return cards.slice(0, limit);
+}
+
+export async function getPublicFleetCompany(companyId: string, cityId?: string) {
+  const company = await prisma.fleetCompany.findFirst({
+    where: { id: companyId, status: FleetCompanyStatus.active },
+    select: {
+      id: true,
+      legalName: true,
+      phone: true,
+      email: true,
+      address: true,
+      logoUrl: true,
+      regionId: true,
+      region: { select: { id: true, code: true, name: true } },
+      owner: { select: { phone: true } },
+      fleetRegions: cityId
+        ? {
+            where: { geoCityId: cityId },
+            take: 1,
+            select: {
+              id: true,
+              name: true,
+              geoCity: {
+                select: { id: true, name: true, province: { select: { name: true } } },
+              },
+            },
+          }
+        : {
+            take: 8,
+            orderBy: { name: 'asc' },
+            select: { id: true, name: true, geoCity: { select: { id: true, name: true } } },
+          },
+    },
+  });
+  if (!company) throw new NotFoundError('Fleet company not found');
+  if (cityId && company.fleetRegions.length === 0) {
+    throw new NotFoundError('This fleet does not operate in the selected city');
+  }
+
+  const geoCity = company.fleetRegions[0]?.geoCity as
+    | { name: string; province?: { name: string } }
+    | null
+    | undefined;
+  const cityLabel = geoCity
+    ? [geoCity.name, geoCity.province?.name, company.region.name].filter(Boolean).join(', ')
+    : company.fleetRegions[0]?.name ?? company.region.name;
+
+  const [stats] = await attachPublicCompanyStats(
+    [
+      {
+        id: company.id,
+        legalName: company.legalName,
+        phone: company.phone ?? company.owner.phone,
+        email: company.email,
+        address: company.address ?? cityLabel,
+        logoUrl: company.logoUrl,
+        regionId: company.regionId,
+        region: company.region,
+        fleetRegionId: cityId ? company.fleetRegions[0]?.id ?? null : null,
+        fleetRegionName: cityId ? company.fleetRegions[0]?.name ?? null : null,
+      },
+    ],
+    cityId,
+  );
+
+  const reviews = await prisma.rideRating.findMany({
+    where: {
+      raterRole: 'passenger',
+      moderationStatus: 'visible',
+      ride: { fleetCompanyId: companyId },
+    },
+    orderBy: { createdAt: 'desc' },
+    take: 20,
+    select: {
+      id: true,
+      score: true,
+      comment: true,
+      createdAt: true,
+      isAnonymous: true,
+      rater: { select: { profile: { select: { fullName: true } } } },
+    },
+  });
+
+  return {
+    ...stats,
+    cities: company.fleetRegions.map((row) => ({
+      id: row.id,
+      name: row.geoCity?.name ?? row.name,
+    })),
+    reviews: reviews.map((row) => ({
+      id: row.id,
+      score: row.score,
+      comment: row.comment,
+      createdAt: row.createdAt,
+      reviewerName: row.isAnonymous
+        ? 'Rideality rider'
+        : row.rater.profile?.fullName?.split(' ')[0] ?? 'Rideality rider',
+    })),
+  };
+}
+
+async function attachPublicCompanyStats<
+  T extends {
+    id: string;
+    legalName: string;
+    phone: string | null;
+    address: string | null;
+    regionId: string;
+    region: { id: string; code: string; name: string };
+    fleetRegionId: string | null;
+    fleetRegionName: string | null;
+  },
+>(companies: T[], cityId?: string) {
+  if (companies.length === 0) return [];
+  const ids = companies.map((c) => c.id);
+  const fleetRegionIds = companies.map((c) => c.fleetRegionId).filter((id): id is string => Boolean(id));
+
+  const [driverGroups, ratingRows] = await Promise.all([
+    prisma.driverProfile.groupBy({
+      by: ['fleetCompanyId'],
+      where: {
+        fleetCompanyId: { in: ids },
+        onboardingStatus: DriverOnboardingStatus.approved,
+        ...(cityId && fleetRegionIds.length ? { fleetRegionId: { in: fleetRegionIds } } : {}),
+      },
+      _count: { _all: true },
+    }),
+    prisma.$queryRaw<Array<{ companyId: string; ratingAvg: unknown; ratingCount: unknown }>>(
+      Prisma.sql`
+        SELECT r.fleet_company_id AS "companyId",
+               ROUND(AVG(rr.score)::numeric, 2) AS "ratingAvg",
+               COUNT(*)::int AS "ratingCount"
+        FROM ride_ratings rr
+        INNER JOIN rides r ON r.id = rr.ride_id
+        WHERE r.fleet_company_id IN (${Prisma.join(ids)})
+          AND rr.moderation_status = 'visible'
+          AND rr.rater_role = 'passenger'
+        GROUP BY r.fleet_company_id
+      `,
+    ),
+  ]);
+
+  const driversByCompany = new Map(driverGroups.map((row) => [row.fleetCompanyId, row._count._all]));
+  const ratingsByCompany = new Map(
+    ratingRows.map((row) => [
+      row.companyId,
+      {
+        ratingAvg: Number(row.ratingAvg ?? 0),
+        ratingCount: Number(row.ratingCount ?? 0),
+      },
+    ]),
+  );
+
+  return companies.map((company) => ({
+    ...company,
+    driverCount: driversByCompany.get(company.id) ?? 0,
+    ratingAvg: ratingsByCompany.get(company.id)?.ratingAvg ?? 0,
+    ratingCount: ratingsByCompany.get(company.id)?.ratingCount ?? 0,
+  }));
 }
 
 export async function listPublicFleetRegions(companyId: string) {
@@ -193,6 +432,18 @@ export async function createFleetRegion(
     data: { fleetCompanyId: companyId, name },
   });
 
+  const catalog = await prisma.serviceProduct.findMany({ where: { isActive: true } });
+  if (catalog.length) {
+    await prisma.fleetRegionService.createMany({
+      data: catalog.map((row) => ({
+        fleetRegionId: region.id,
+        productCode: row.code,
+        enabled: true,
+      })),
+      skipDuplicates: true,
+    });
+  }
+
   await prisma.auditLog.create({
     data: {
       actorId: requesterId,
@@ -211,6 +462,44 @@ async function assertFleetRegion(companyId: string, regionId: string) {
   });
   if (!region) throw new NotFoundError('Fleet region not found');
   return region;
+}
+
+export async function listFleetCityServices(fleetRegionId: string) {
+  const catalog = await prisma.serviceProduct.findMany({
+    where: { isActive: true },
+    orderBy: { sortOrder: 'asc' },
+  });
+  const enabled = await prisma.fleetRegionService.findMany({
+    where: { fleetRegionId },
+  });
+  const byCode = new Map(enabled.map((row) => [row.productCode, row.enabled]));
+  return catalog.map((row) => ({
+    code: row.code,
+    label: row.label,
+    family: row.family === 'cargo' ? 'cargo' : 'taxi',
+    enabled: byCode.get(row.code) ?? false,
+  }));
+}
+
+export async function setFleetCityServices(
+  companyId: string,
+  requesterId: string,
+  regionId: string,
+  products: Array<{ code: string; enabled: boolean }>,
+) {
+  await assertFleetOwner(companyId, requesterId);
+  await assertFleetRegion(companyId, regionId);
+  const catalog = await prisma.serviceProduct.findMany({ where: { isActive: true } });
+  const allowed = new Set(catalog.map((row) => row.code));
+  for (const row of products) {
+    if (!allowed.has(row.code)) continue;
+    await prisma.fleetRegionService.upsert({
+      where: { fleetRegionId_productCode: { fleetRegionId: regionId, productCode: row.code } },
+      create: { fleetRegionId: regionId, productCode: row.code, enabled: row.enabled },
+      update: { enabled: row.enabled },
+    });
+  }
+  return listFleetCityServices(regionId);
 }
 
 /** One active regional user per city. */
@@ -507,17 +796,37 @@ export async function reviewFleetDocumentById(
 ) {
   const doc = await prisma.verificationDocument.findUnique({
     where: { id: documentId },
-    include: { user: { include: { driverProfile: true } } },
+    include: {
+      user: {
+        include: {
+          driverProfile: {
+            include: { fleetRegion: { select: { id: true, geoCityId: true } } },
+          },
+        },
+      },
+    },
   });
-  if (!doc?.user.driverProfile?.fleetCompanyId) {
+  const driver = doc?.user.driverProfile;
+  const companyId = driver?.fleetCompanyId;
+  if (!driver || !companyId) {
     throw new NotFoundError('Document not found');
   }
-  const companyId = doc.user.driverProfile.fleetCompanyId;
-  const cityId = assignmentCityId ?? doc.user.driverProfile.fleetRegionId;
-  await assertCanReviewFleetDocuments(companyId, requesterId, {
-    fleetRegionId: cityId ?? undefined,
+  const driverFleetRegionId = driver.fleetRegionId;
+  const driverGeoCityId = driver.fleetRegion?.geoCityId ?? null;
+
+  // AdminAssignment.cityId is geo City.id; fleet membership uses FleetRegion.id.
+  if (
+    assignmentCityId &&
+    assignmentCityId !== driverFleetRegionId &&
+    assignmentCityId !== driverGeoCityId
+  ) {
+    throw new ForbiddenError('No access to this fleet region');
+  }
+
+  const access = await assertCanReviewFleetDocuments(companyId, requesterId, {
+    fleetRegionId: driverFleetRegionId ?? undefined,
   });
-  return applyFleetDocumentReview(companyId, requesterId, documentId, data, cityId ?? null);
+  return applyFleetDocumentReview(companyId, requesterId, documentId, data, access.fleetRegionId);
 }
 
 async function applyFleetDocumentReview(
@@ -670,7 +979,9 @@ export async function createPlatformStaffUser(
         ? FleetMemberRole.regional
         : data.type === 'FLEET_SUPPORT'
           ? FleetMemberRole.support
-          : null;
+          : data.type === 'FLEET_FINANCE'
+            ? FleetMemberRole.finance
+            : null;
 
     if (memberRole) {
       await prisma.fleetMembership.create({
@@ -1044,6 +1355,7 @@ export async function getFleetCityProfile(
             FleetMemberRole.manager,
             FleetMemberRole.support,
             FleetMemberRole.dispatcher,
+            FleetMemberRole.finance,
           ],
         },
       },
@@ -1176,6 +1488,7 @@ export async function getFleetCityProfile(
 
   return {
     city: { id: region.id, name: region.name, createdAt: region.createdAt },
+    services: await listFleetCityServices(region.id),
     regionalAdmins: cityStaff
       .filter((m) => m.role === FleetMemberRole.regional || m.role === FleetMemberRole.manager)
       .map(mappedStaff),

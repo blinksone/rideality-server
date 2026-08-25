@@ -7,7 +7,6 @@ import { param } from '../utils/params';
 import { canAccessPortal } from '../services/portal.service';
 import { ForbiddenError } from '../utils/errors';
 import * as financeService from '../services/finance.service';
-import type { AdminAssignmentRecord } from '../services/admin-scope.service';
 import {
   bulkWalletStatusSchema,
   createAdjustmentSchema,
@@ -28,22 +27,12 @@ import {
 
 const router = Router();
 
-function applyWalletListScope(
-  assignment: AdminAssignmentRecord | null | undefined,
-  query: { regionId?: string; continentId?: string },
-) {
-  if (assignment?.scopeType === 'CITY') {
-    throw new ForbiddenError('Forbidden: outside your assigned scope');
-  }
-  if (assignment?.scopeType === 'COUNTRY' && assignment.countryId) {
-    query.regionId = assignment.countryId;
-  }
-  if (assignment?.scopeType === 'REGIONAL' && assignment.countryId) {
-    query.regionId = assignment.countryId;
-  }
-  if (assignment?.scopeType === 'CONTINENT' && assignment.continentId) {
-    query.continentId = assignment.continentId;
-  }
+function financeActor(req: AdminAuthRequest): financeService.FinanceActor {
+  return {
+    userId: req.user!.sub,
+    roles: req.user!.platformRoles ?? [],
+    assignment: req.adminAssignment,
+  };
 }
 
 function requirePortalAccess(req: AuthRequest, _res: unknown, next: (err?: unknown) => void) {
@@ -60,9 +49,10 @@ router.use(authenticate, loadAdminPermissions, requirePortalAccess, requirePassw
 router.get(
   '/summary',
   requirePermission(PERMISSION_KEYS.VIEW_FINANCE),
-  async (_req, res, next) => {
+  async (req: AdminAuthRequest, res, next) => {
     try {
-      const data = await financeService.getFinanceSummary();
+      const accessWhere = await financeService.resolveFinanceWalletWhere(financeActor(req));
+      const data = await financeService.getFinanceSummary(accessWhere);
       sendSuccess(res, data);
     } catch (err) {
       next(err);
@@ -91,8 +81,8 @@ router.get(
         updatedTo?: string;
         ids?: string;
       };
-      applyWalletListScope(req.adminAssignment, query);
-      const { wallets, total } = await financeService.listWallets(query);
+      const accessWhere = await financeService.resolveFinanceWalletWhere(financeActor(req));
+      const { wallets, total } = await financeService.listWallets({ ...query, accessWhere });
       sendPaginated(res, wallets, { page: query.page, limit: query.limit, total });
     } catch (err) {
       next(err);
@@ -107,8 +97,8 @@ router.get(
   async (req: AdminAuthRequest, res, next) => {
     try {
       const query = req.query as unknown as Parameters<typeof financeService.exportWalletsCsv>[0];
-      applyWalletListScope(req.adminAssignment, query);
-      const csv = await financeService.exportWalletsCsv(query);
+      const accessWhere = await financeService.resolveFinanceWalletWhere(financeActor(req));
+      const csv = await financeService.exportWalletsCsv({ ...query, accessWhere });
       res.setHeader('Content-Type', 'text/csv; charset=utf-8');
       res.setHeader('Content-Disposition', 'attachment; filename="wallets-export.csv"');
       res.send(csv);
@@ -151,10 +141,11 @@ router.get(
   '/wallets/lookup',
   requirePermission(PERMISSION_KEYS.VIEW_FINANCE),
   validate(walletLookupSchema, 'query'),
-  async (req, res, next) => {
+  async (req: AdminAuthRequest, res, next) => {
     try {
       const { email } = req.query as unknown as { email: string };
-      const wallets = await financeService.lookupWalletsByEmail(email);
+      const accessWhere = await financeService.resolveFinanceWalletWhere(financeActor(req));
+      const wallets = await financeService.lookupWalletsByEmail(email, accessWhere);
       sendSuccess(res, { wallets });
     } catch (err) {
       next(err);
@@ -165,9 +156,11 @@ router.get(
 router.get(
   '/wallets/:id/dashboard',
   requirePermission(PERMISSION_KEYS.VIEW_FINANCE),
-  async (req, res, next) => {
+  async (req: AdminAuthRequest, res, next) => {
     try {
-      const data = await financeService.getWalletDashboardDetail(param(req.params.id));
+      const walletId = param(req.params.id);
+      await financeService.assertFinanceWalletAccess(financeActor(req), walletId);
+      const data = await financeService.getWalletDashboardDetail(walletId);
       sendSuccess(res, data);
     } catch (err) {
       next(err);
@@ -178,9 +171,11 @@ router.get(
 router.get(
   '/wallets/:id',
   requirePermission(PERMISSION_KEYS.VIEW_FINANCE),
-  async (req, res, next) => {
+  async (req: AdminAuthRequest, res, next) => {
     try {
-      const data = await financeService.getWalletById(param(req.params.id));
+      const walletId = param(req.params.id);
+      await financeService.assertFinanceWalletAccess(financeActor(req), walletId);
+      const data = await financeService.getWalletById(walletId);
       sendSuccess(res, data);
     } catch (err) {
       next(err);
@@ -192,11 +187,13 @@ router.get(
   '/wallets/:id/transactions',
   requirePermission(PERMISSION_KEYS.VIEW_FINANCE),
   validate(listWalletTransactionsSchema, 'query'),
-  async (req, res, next) => {
+  async (req: AdminAuthRequest, res, next) => {
     try {
+      const walletId = param(req.params.id);
+      await financeService.assertFinanceWalletAccess(financeActor(req), walletId);
       const query = req.query as unknown as { page: number; limit: number };
       const { transactions, total } = await financeService.listWalletTransactions(
-        param(req.params.id),
+        walletId,
         query.page,
         query.limit,
       );
@@ -247,7 +244,7 @@ router.get(
   '/transactions',
   requirePermission(PERMISSION_KEYS.VIEW_FINANCE),
   validate(listFinanceTransactionsSchema, 'query'),
-  async (req, res, next) => {
+  async (req: AdminAuthRequest, res, next) => {
     try {
       const query = req.query as unknown as {
         page: number;
@@ -255,7 +252,11 @@ router.get(
         walletId?: string;
         type?: import('@prisma/client').WalletTransactionType;
       };
-      const { transactions, total } = await financeService.listGlobalTransactions(query);
+      const accessWhere = await financeService.resolveFinanceWalletWhere(financeActor(req));
+      const { transactions, total } = await financeService.listGlobalTransactions({
+        ...query,
+        accessWhere,
+      });
       sendPaginated(res, transactions, { page: query.page, limit: query.limit, total });
     } catch (err) {
       next(err);
@@ -267,7 +268,7 @@ router.get(
   '/adjustments',
   requirePermission(PERMISSION_KEYS.VIEW_FINANCE),
   validate(listAdjustmentsSchema, 'query'),
-  async (req, res, next) => {
+  async (req: AdminAuthRequest, res, next) => {
     try {
       const query = req.query as unknown as {
         page: number;
@@ -275,7 +276,8 @@ router.get(
         status?: 'pending' | 'approved' | 'rejected' | 'cancelled';
         walletId?: string;
       };
-      const { adjustments, total } = await financeService.listAdjustments(query);
+      const accessWhere = await financeService.resolveFinanceWalletWhere(financeActor(req));
+      const { adjustments, total } = await financeService.listAdjustments({ ...query, accessWhere });
       sendPaginated(res, adjustments, { page: query.page, limit: query.limit, total });
     } catch (err) {
       next(err);
@@ -321,7 +323,7 @@ router.get(
   '/payouts',
   requirePermission(PERMISSION_KEYS.VIEW_FINANCE),
   validate(listPayoutsSchema, 'query'),
-  async (req, res, next) => {
+  async (req: AdminAuthRequest, res, next) => {
     try {
       const query = req.query as unknown as {
         page: number;
@@ -329,7 +331,8 @@ router.get(
         status?: 'pending' | 'approved' | 'processing' | 'completed' | 'rejected' | 'cancelled';
         walletId?: string;
       };
-      const { payouts, total } = await financeService.listPayouts(query);
+      const accessWhere = await financeService.resolveFinanceWalletWhere(financeActor(req));
+      const { payouts, total } = await financeService.listPayouts({ ...query, accessWhere });
       sendPaginated(res, payouts, { page: query.page, limit: query.limit, total });
     } catch (err) {
       next(err);

@@ -44,3 +44,12 @@ export function formatAdminRole(role: string | null | undefined): string {
 export function formatPhone(phone: string | null | undefined): string {
   return phone ?? '—';
 }
+
+/** Resolve API-hosted paths like `/uploads/logo.png` for img src / links. */
+export function mediaUrl(path: string | null | undefined): string | undefined {
+  if (!path) return undefined;
+  if (/^https?:\/\//i.test(path)) return path;
+  const api = import.meta.env.VITE_API_URL || 'http://65.21.177.122:3000/api/v1';
+  const origin = api.replace(/\/api\/v1\/?$/, '');
+  return `${origin}${path.startsWith('/') ? path : `/${path}`}`;
+}

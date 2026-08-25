@@ -1,4 +1,5 @@
 import { Router } from 'express';
+import multer from 'multer';
 import { z } from 'zod';
 import { authenticate, AuthRequest, requirePasswordResetComplete } from '../middleware/auth';
 import { loadAdminPermissions, requirePermissionInScope, PERMISSION_KEYS, AdminAuthRequest } from '../middleware/permissions';
@@ -29,6 +30,11 @@ import {
   createFleetStaffSchema,
   reviewFleetComplaintSchema,
   publicFleetCompaniesQuerySchema,
+  publicFleetCitiesQuerySchema,
+  publicFleetCompanyDetailQuerySchema,
+  createFleetDriverCreditSchema,
+  listFleetDriverCreditsQuerySchema,
+  reviewFleetDriverCreditSchema,
 } from '../validators/fleet.validator';
 import {
   createPayoutRequestSchema,
@@ -38,14 +44,50 @@ import {
 import { sendPaginated } from '../utils/response';
 
 const router = Router();
+const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 5 * 1024 * 1024 } });
 
 router.get(
   '/companies',
   validate(publicFleetCompaniesQuerySchema, 'query'),
   async (req, res, next) => {
     try {
-      const query = req.query as { regionId?: string; regionCode?: string };
+      const query = req.query as {
+        regionId?: string;
+        regionCode?: string;
+        cityId?: string;
+        search?: string;
+        sort?: 'top' | 'name';
+        limit?: number;
+      };
       const data = await fleetHierarchy.listPublicFleetCompanies(query);
+      sendSuccess(res, data);
+    } catch (err) {
+      next(err);
+    }
+  },
+);
+
+router.get(
+  '/cities',
+  validate(publicFleetCitiesQuerySchema, 'query'),
+  async (req, res, next) => {
+    try {
+      const regionId = String(req.query.regionId);
+      const data = await fleetHierarchy.listPublicSignupCities(regionId);
+      sendSuccess(res, data);
+    } catch (err) {
+      next(err);
+    }
+  },
+);
+
+router.get(
+  '/companies/:id/public',
+  validate(publicFleetCompanyDetailQuerySchema, 'query'),
+  async (req, res, next) => {
+    try {
+      const cityId = typeof req.query.cityId === 'string' ? req.query.cityId : undefined;
+      const data = await fleetHierarchy.getPublicFleetCompany(param(req.params.id), cityId);
       sendSuccess(res, data);
     } catch (err) {
       next(err);
@@ -383,6 +425,31 @@ router.get('/companies/:id/regions/:regionId', async (req: AuthRequest, res, nex
   }
 });
 
+router.put(
+  '/companies/:id/regions/:regionId/services',
+  validate(
+    z.object({
+      products: z
+        .array(z.object({ code: z.string().min(1).max(32), enabled: z.boolean() }))
+        .min(1)
+        .max(20),
+    }),
+  ),
+  async (req: AuthRequest, res, next) => {
+    try {
+      const data = await fleetHierarchy.setFleetCityServices(
+        param(req.params.id),
+        req.user!.sub,
+        param(req.params.regionId),
+        req.body.products,
+      );
+      sendSuccess(res, data);
+    } catch (err) {
+      next(err);
+    }
+  },
+);
+
 router.patch(
   '/companies/:id/complaints/:complaintId',
   validate(reviewFleetComplaintSchema),
@@ -661,6 +728,22 @@ router.patch('/companies/:id', validate(updateFleetSchema), async (req: AuthRequ
   }
 });
 
+router.post('/companies/:id/logo', upload.single('logo'), async (req: AuthRequest, res, next) => {
+  try {
+    if (!req.file) {
+      res.status(400).json({
+        success: false,
+        error: { code: 'NO_FILE', message: 'Logo file required' },
+      });
+      return;
+    }
+    const data = await fleetService.updateFleetCompanyLogo(param(req.params.id), req.user!.sub, req.file);
+    sendSuccess(res, data);
+  } catch (err) {
+    next(err);
+  }
+});
+
 router.post(
   '/companies/:id/invites',
   validate(fleetInviteSchema),
@@ -831,6 +914,65 @@ router.post(
         { ...req.body, walletId: wallet.id },
       );
       sendSuccess(res, data, 201);
+    } catch (err) {
+      next(err);
+    }
+  },
+);
+
+router.get(
+  '/companies/:id/driver-credits',
+  validate(listFleetDriverCreditsQuerySchema, 'query'),
+  async (req: AuthRequest, res, next) => {
+    try {
+      const query = req.query as unknown as {
+        status?: 'pending' | 'approved' | 'rejected';
+        page: number;
+        limit: number;
+      };
+      const { credits, total } = await financeService.listFleetDriverCredits(
+        param(req.params.id),
+        req.user!.sub,
+        query,
+      );
+      sendPaginated(res, credits, { page: query.page, limit: query.limit, total });
+    } catch (err) {
+      next(err);
+    }
+  },
+);
+
+router.post(
+  '/companies/:id/driver-credits',
+  validate(createFleetDriverCreditSchema),
+  async (req: AuthRequest, res, next) => {
+    try {
+      const data = await financeService.requestFleetDriverCredit(
+        param(req.params.id),
+        req.user!.sub,
+        req.body,
+      );
+      sendSuccess(res, data, 201);
+    } catch (err) {
+      next(err);
+    }
+  },
+);
+
+router.post(
+  '/companies/:id/driver-credits/:creditId/review',
+  validate(reviewFleetDriverCreditSchema),
+  async (req: AuthRequest, res, next) => {
+    try {
+      const data = await financeService.reviewFleetDriverCredit(
+        param(req.params.id),
+        req.user!.sub,
+        req.user!.platformRoles,
+        param(req.params.creditId),
+        req.body.action,
+        req.body.reviewNote,
+      );
+      sendSuccess(res, data);
     } catch (err) {
       next(err);
     }

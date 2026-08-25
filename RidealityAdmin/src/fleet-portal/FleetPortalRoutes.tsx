@@ -7,6 +7,7 @@ import FleetInvitationsPage from '@/fleet-portal/pages/FleetInvitationsPage';
 import FleetWalletPage from '@/fleet-portal/pages/FleetWalletPage';
 import FleetTransactionsPage from '@/fleet-portal/pages/FleetTransactionsPage';
 import FleetPayoutsPage from '@/fleet-portal/pages/FleetPayoutsPage';
+import FleetDriverCreditsPage from '@/fleet-portal/pages/FleetDriverCreditsPage';
 import FleetTeamPage from '@/fleet-portal/pages/FleetTeamPage';
 import FleetCompanyPage, { FleetSettingsPage } from '@/fleet-portal/pages/FleetCompanyPage';
 import FleetVehiclesPage from '@/fleet-portal/pages/FleetVehiclesPage';
@@ -54,7 +55,7 @@ export default function FleetPortalRoutes() {
         <Route
           path=":companyId/drivers"
           element={
-            <TierGuard allow={['regional', 'support']}>
+            <TierGuard allow={['owner', 'regional', 'support', 'finance']}>
               <FleetDriversPage />
             </TierGuard>
           }
@@ -128,6 +129,14 @@ export default function FleetPortalRoutes() {
           element={
             <TierGuard allow={['owner']}>
               <FleetPayoutsPage />
+            </TierGuard>
+          }
+        />
+        <Route
+          path=":companyId/driver-credits"
+          element={
+            <TierGuard allow={['owner', 'finance']}>
+              <FleetDriverCreditsPage />
             </TierGuard>
           }
         />

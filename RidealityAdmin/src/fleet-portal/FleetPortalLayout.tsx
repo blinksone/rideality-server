@@ -51,7 +51,7 @@ function getBreadcrumb(segment: string) {
 function FleetPortalShell() {
   const { companyId: routeCompanyId } = useParams();
   const { user } = useAuth();
-  const { company, companies, companyId } = useFleetCompany();
+  const { company, companies, companyId, setCompanyId } = useFleetCompany();
   const location = useLocation();
   const navigate = useNavigate();
   const dispatch = useAppDispatch();
@@ -60,11 +60,8 @@ function FleetPortalShell() {
   const [mobileOpen, setMobileOpen] = useState(false);
   const [logoutOpen, setLogoutOpen] = useState(false);
 
-  const memberships = user?.fleetMemberships ?? [];
   const activeId = routeCompanyId ?? companyId ?? '';
-  const canAccessCompany = Boolean(
-    activeId && memberships.some((m) => m.companyId === activeId),
-  );
+  const canAccessCompany = Boolean(activeId && companies.some((c) => c.id === activeId));
   const tier = useFleetAccessTier(activeId || undefined);
   const membership = useActiveFleetMembership(activeId || undefined);
   const navSections = getFleetNavSections(tier);
@@ -143,58 +140,87 @@ function FleetPortalShell() {
     },
   });
 
+  const switchCompany = (nextId: string) => {
+    setCompanyId(nextId);
+    const allowed = new Set(navSections.flatMap((section) => section.items.map((item) => item.segment)));
+    const currentSeg = pathParts.includes('regions') ? 'regions' : pathSegment;
+    const nextSeg = allowed.has(currentSeg) ? currentSeg : fleetLandingSegment(tier);
+    navigate(fleetPath(nextId, nextSeg));
+  };
+
+  const companySelect = companies.length > 0 && (
+    <Select
+      size="small"
+      fullWidth
+      value={companies.some((c) => c.id === activeId) ? activeId : ''}
+      onChange={(e) => switchCompany(String(e.target.value))}
+      displayEmpty
+      sx={{
+        fontSize: 13,
+        fontWeight: 600,
+        '& .MuiSelect-select': { py: 1 },
+      }}
+    >
+      {companies.map((c) => (
+        <MenuItem key={c.id} value={c.id}>
+          {c.legalName}
+        </MenuItem>
+      ))}
+    </Select>
+  );
+
   const drawer = (
     <Box sx={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
       <Box
         sx={{
-          display: 'flex',
-          alignItems: 'center',
-          gap: 1,
-          px: 1.75,
-          py: 1.5,
-          minHeight: 56,
+          px: 1.5,
+          pt: 1.5,
+          pb: 1.25,
           borderBottom: 1,
           borderColor: 'divider',
         }}
       >
-        <Box
-          sx={{
-            width: 30,
-            height: 30,
-            borderRadius: 2,
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            color: '#fff',
-            background: 'linear-gradient(135deg, #2563EB 0%, #4F46E5 100%)',
-          }}
-        >
-          <AutoAwesomeIcon sx={{ fontSize: 16 }} />
-        </Box>
-        <Box>
-          <Typography
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1.25 }}>
+          <Box
             sx={{
-              fontFamily: '"Space Grotesk", sans-serif',
-              fontWeight: 700,
-              fontSize: 15,
-              letterSpacing: '-0.02em',
-              lineHeight: 1.1,
+              width: 30,
+              height: 30,
+              borderRadius: 2,
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              color: '#fff',
+              background: 'linear-gradient(135deg, #2563EB 0%, #4F46E5 100%)',
             }}
           >
-            Rideality
-          </Typography>
-          <Typography
-            sx={{
-              fontSize: 9,
-              fontWeight: 600,
-              color: 'primary.main',
-              textTransform: 'uppercase',
-              letterSpacing: '0.08em',
-            }}
-          >
-            {tierLabel}
-          </Typography>
+            <AutoAwesomeIcon sx={{ fontSize: 16 }} />
+          </Box>
+          <Box>
+            <Typography
+              sx={{
+                fontFamily: '"Space Grotesk", sans-serif',
+                fontWeight: 700,
+                fontSize: 15,
+                letterSpacing: '-0.02em',
+                lineHeight: 1.1,
+              }}
+            >
+              Rideality
+            </Typography>
+            <Typography
+              sx={{
+                fontSize: 9,
+                fontWeight: 600,
+                color: 'primary.main',
+                textTransform: 'uppercase',
+                letterSpacing: '0.08em',
+              }}
+            >
+              {tierLabel}
+            </Typography>
+          </Box>
         </Box>
+        {companySelect}
       </Box>
 
       <List sx={{ flex: 1, px: 1, py: 1, overflow: 'auto' }} disablePadding>
@@ -318,28 +344,12 @@ function FleetPortalShell() {
 
           <Box sx={{ flexGrow: { xs: 1, md: 0 }, minWidth: 0 }}>
             <Typography variant="caption" color="text.secondary" sx={{ fontWeight: 500 }}>
-              Fleet / {pageTitle}
+              {company?.legalName ?? 'Fleet'} / {pageTitle}
             </Typography>
             <Typography variant="h6" sx={{ fontWeight: 700, fontFamily: '"Space Grotesk", sans-serif', lineHeight: 1.2 }} noWrap>
               {pageTitle}
             </Typography>
           </Box>
-
-          {companies.length > 0 && (
-            <Select
-              size="small"
-              value={companies.some((c) => c.id === activeId) ? activeId : ''}
-              onChange={(e) => navigate(fleetPath(e.target.value, fleetLandingSegment(tier)))}
-              sx={{ minWidth: 200, ml: { md: 3 } }}
-              displayEmpty
-            >
-              {companies.map((c) => (
-                <MenuItem key={c.id} value={c.id}>
-                  {c.legalName}
-                </MenuItem>
-              ))}
-            </Select>
-          )}
 
           <Box sx={{ flexGrow: 1 }} />
 

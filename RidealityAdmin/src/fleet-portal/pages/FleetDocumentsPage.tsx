@@ -16,7 +16,7 @@ import {
 import FolderIcon from '@mui/icons-material/Folder';
 import PendingActionsIcon from '@mui/icons-material/PendingActions';
 import CheckCircleIcon from '@mui/icons-material/CheckCircle';
-import { approveFleetDocument, listFleetDocuments, rejectFleetDocument } from '@/api/fleet.api';
+import { listFleetDocuments, reviewFleetDocument } from '@/api/fleet.api';
 import { getApiErrorMessage } from '@/api/client';
 import DataTable, { type DataTableColumn } from '@/components/DataTable';
 import FleetContentCard from '@/fleet-portal/components/FleetContentCard';
@@ -76,9 +76,10 @@ export default function FleetDocumentsPage() {
       status: 'approved' | 'rejected';
       reason?: string;
     }) =>
-      status === 'approved'
-        ? approveFleetDocument(documentId)
-        : rejectFleetDocument(documentId, reason ?? ''),
+      reviewFleetDocument(companyId, documentId, {
+        status,
+        rejectionReason: reason,
+      }),
     onSuccess: () => {
       notify.success('Document updated');
       queryClient.invalidateQueries({ queryKey: ['fleet-documents', companyId] });

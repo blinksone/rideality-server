@@ -202,6 +202,126 @@ async function main() {
   const { backfillAdminAssignments } = await import('../src/services/admin-scope.service');
   const backfill = await backfillAdminAssignments();
   console.log('Admin assignments backfilled:', backfill);
+
+  await seedPopularPlaces();
+}
+
+const KARACHI_PLACES: Array<{
+  name: string;
+  formattedAddress: string;
+  latitude: number;
+  longitude: number;
+  area: string;
+  type: string;
+  priority: number;
+}> = [
+  {
+    name: 'Dolmen Mall Clifton',
+    formattedAddress: 'Marine Drive, Clifton, Karachi',
+    latitude: 24.8138,
+    longitude: 67.0305,
+    area: 'Clifton',
+    type: 'MALL',
+    priority: 100,
+  },
+  {
+    name: 'Boat Basin',
+    formattedAddress: 'Khayaban-e-Roomi, Clifton, Karachi',
+    latitude: 24.8266,
+    longitude: 67.0338,
+    area: 'Clifton',
+    type: 'POI',
+    priority: 90,
+  },
+  {
+    name: 'Sea View',
+    formattedAddress: 'Sea View Road, Clifton, Karachi',
+    latitude: 24.8055,
+    longitude: 67.0302,
+    area: 'Clifton',
+    type: 'PARK',
+    priority: 90,
+  },
+  {
+    name: 'Clifton Block 4',
+    formattedAddress: 'Block 4, Clifton, Karachi',
+    latitude: 24.8185,
+    longitude: 67.0284,
+    area: 'Clifton',
+    type: 'ADDRESS',
+    priority: 70,
+  },
+  {
+    name: 'LuckyOne Mall',
+    formattedAddress: 'LA-2/B, Block 21, Federal B Area, Karachi',
+    latitude: 24.9321,
+    longitude: 67.0876,
+    area: 'Federal B Area',
+    type: 'MALL',
+    priority: 85,
+  },
+  {
+    name: 'Jinnah International Airport',
+    formattedAddress: 'Airport Road, Karachi',
+    latitude: 24.9065,
+    longitude: 67.1608,
+    area: 'Malir',
+    type: 'AIRPORT',
+    priority: 95,
+  },
+  {
+    name: 'Saddar',
+    formattedAddress: 'Saddar Town, Karachi',
+    latitude: 24.8553,
+    longitude: 67.0291,
+    area: 'Saddar',
+    type: 'POI',
+    priority: 80,
+  },
+  {
+    name: 'PECHS',
+    formattedAddress: 'Pakistan Employees Cooperative Housing Society, Karachi',
+    latitude: 24.8731,
+    longitude: 67.0677,
+    area: 'PECHS',
+    type: 'ADDRESS',
+    priority: 75,
+  },
+  {
+    name: 'DHA Phase 5',
+    formattedAddress: 'DHA Phase 5, Karachi',
+    latitude: 24.8072,
+    longitude: 67.0476,
+    area: 'DHA',
+    type: 'ADDRESS',
+    priority: 75,
+  },
+  {
+    name: 'Port Grand',
+    formattedAddress: 'West Wharf, Karachi',
+    latitude: 24.8474,
+    longitude: 66.9953,
+    area: 'Keamari',
+    type: 'POI',
+    priority: 70,
+  },
+];
+
+async function seedPopularPlaces() {
+  for (const row of KARACHI_PLACES) {
+    const existing = await prisma.place.findFirst({
+      where: { name: row.name, city: 'Karachi', source: 'SYSTEM' },
+    });
+    if (existing) continue;
+    await prisma.place.create({
+      data: {
+        ...row,
+        city: 'Karachi',
+        source: 'SYSTEM',
+      },
+    });
+  }
+  console.log('Popular Karachi places seeded:', KARACHI_PLACES.length);
 }
 
 main()

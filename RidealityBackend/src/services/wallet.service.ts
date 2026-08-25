@@ -40,6 +40,7 @@ const CREDIT_TYPES: WalletTransactionType[] = [
   WalletTransactionType.topup,
   WalletTransactionType.adjustment_credit,
   WalletTransactionType.ride_earnings,
+  WalletTransactionType.commission,
   WalletTransactionType.refund,
   WalletTransactionType.release,
 ];
@@ -189,6 +190,35 @@ export async function ensureFleetWallet(
     },
     update: {},
   });
+}
+
+export async function ensurePlatformWallet(
+  regionId: string,
+  currency: string,
+  tx: Prisma.TransactionClient = prisma,
+) {
+  assertLocalWalletMutation();
+  const existing = await tx.wallet.findFirst({
+    where: { ownerType: WalletOwnerType.platform, regionId, currency },
+  });
+  if (existing) return existing;
+  try {
+    return await tx.wallet.create({
+      data: {
+        ownerType: WalletOwnerType.platform,
+        regionId,
+        currency,
+      },
+    });
+  } catch (err) {
+    if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2002') {
+      const again = await tx.wallet.findFirst({
+        where: { ownerType: WalletOwnerType.platform, regionId, currency },
+      });
+      if (again) return again;
+    }
+    throw err;
+  }
 }
 
 export async function getWalletById(walletId: string) {

@@ -54,9 +54,32 @@ export async function getFleetCompany(id: string): Promise<FleetCompany> {
 
 export async function updateFleetCompany(
   id: string,
-  payload: { legalName?: string; taxId?: string },
+  payload: {
+    legalName?: string;
+    taxId?: string | null;
+    phone?: string | null;
+    email?: string | null;
+    address?: string | null;
+    fleetTakePercent?: number;
+  },
 ): Promise<FleetCompany> {
   const { data } = await apiClient.patch<ApiSuccess<FleetCompany>>(`/fleet/companies/${id}`, payload);
+  return data.data;
+}
+
+export async function uploadFleetCompanyLogo(id: string, file: File): Promise<FleetCompany> {
+  const form = new FormData();
+  form.append('logo', file);
+  const { data } = await apiClient.post<ApiSuccess<FleetCompany>>(`/fleet/companies/${id}/logo`, form, {
+    transformRequest: [
+      (body, headers) => {
+        if (body instanceof FormData) {
+          delete headers['Content-Type'];
+        }
+        return body;
+      },
+    ],
+  });
   return data.data;
 }
 
@@ -338,6 +361,46 @@ export async function listFleetPayouts(
     { params },
   );
   return data;
+}
+
+export async function listFleetDriverCredits(
+  companyId: string,
+  params: PaginationParams & { status?: string },
+): Promise<ApiPaginated<import('@/api/types').FleetDriverCredit>> {
+  const { data } = await apiClient.get<ApiPaginated<import('@/api/types').FleetDriverCredit>>(
+    `/fleet/companies/${companyId}/driver-credits`,
+    { params },
+  );
+  return data;
+}
+
+export async function requestFleetDriverCredit(
+  companyId: string,
+  payload: {
+    driverUserId: string;
+    amount: number;
+    reason: string;
+    topupMethod: 'cash' | 'bank_transfer' | 'admin_manual' | 'gateway';
+    externalRef?: string;
+  },
+): Promise<import('@/api/types').FleetDriverCredit> {
+  const { data } = await apiClient.post<ApiSuccess<import('@/api/types').FleetDriverCredit>>(
+    `/fleet/companies/${companyId}/driver-credits`,
+    payload,
+  );
+  return data.data;
+}
+
+export async function reviewFleetDriverCredit(
+  companyId: string,
+  creditId: string,
+  payload: { action: 'approve' | 'reject'; reviewNote?: string },
+): Promise<import('@/api/types').FleetDriverCredit> {
+  const { data } = await apiClient.post<ApiSuccess<import('@/api/types').FleetDriverCredit>>(
+    `/fleet/companies/${companyId}/driver-credits/${creditId}/review`,
+    payload,
+  );
+  return data.data;
 }
 
 export interface FleetVehicle {
@@ -632,6 +695,12 @@ export async function listManagedFleetRegions(companyId: string): Promise<FleetR
 
 export interface FleetCityProfile {
   city: { id: string; name: string; createdAt: string };
+  services?: Array<{
+    code: string;
+    label: string;
+    family: 'taxi' | 'cargo';
+    enabled: boolean;
+  }>;
   regionalAdmins: Array<{
     userId: string;
     fullName: string | null;
@@ -745,6 +814,18 @@ export async function getFleetCityProfile(
 ): Promise<FleetCityProfile> {
   const { data } = await apiClient.get<ApiSuccess<FleetCityProfile>>(
     `/fleet/companies/${companyId}/regions/${regionId}`,
+  );
+  return data.data;
+}
+
+export async function updateFleetCityServices(
+  companyId: string,
+  regionId: string,
+  products: Array<{ code: string; enabled: boolean }>,
+): Promise<NonNullable<FleetCityProfile['services']>> {
+  const { data } = await apiClient.put<ApiSuccess<NonNullable<FleetCityProfile['services']>>>(
+    `/fleet/companies/${companyId}/regions/${regionId}/services`,
+    { products },
   );
   return data.data;
 }

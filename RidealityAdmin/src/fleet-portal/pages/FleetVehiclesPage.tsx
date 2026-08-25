@@ -46,7 +46,7 @@ const STATUS_COLOR: Record<string, 'success' | 'warning' | 'default'> = {
   offline: 'default',
 };
 
-const VEHICLE_TYPES = ['Car', 'SUV', 'Van', 'Bike', 'Rickshaw'];
+const VEHICLE_TYPES = ['economy', 'ac', 'bike', 'rickshaw', 'cargo'];
 
 type VehicleForm = {
   driverUserId: string;
@@ -60,7 +60,7 @@ type VehicleForm = {
 
 const EMPTY_FORM: VehicleForm = {
   driverUserId: '',
-  vehicleType: 'Car',
+  vehicleType: 'economy',
   model: '',
   numberPlate: '',
   color: '',

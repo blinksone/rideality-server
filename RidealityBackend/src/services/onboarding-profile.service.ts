@@ -288,6 +288,7 @@ export async function completeDriverOnboarding(userId: string, data: DriverOnboa
     remaining: {
       vehicle: !onboarding.vehicle_info,
       documents: !onboarding.documents_uploaded,
+      document_approval: onboarding.documents_uploaded && !onboarding.documents_approved,
       approval: !onboarding.driver_approved,
     },
   };

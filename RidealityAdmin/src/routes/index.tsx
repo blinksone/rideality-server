@@ -15,6 +15,8 @@ import CompanyCreatePage from '@/modules/fleet/CompanyCreatePage';
 import CompanyDetailPage from '@/modules/fleet/CompanyDetailPage';
 import SuperAdminGuard from '@/auth/SuperAdminGuard';
 import RegionsListPage from '@/modules/regions/RegionsListPage';
+import FareConfigsPage from '@/modules/fares/FareConfigsPage';
+import PlacesListPage from '@/modules/places/PlacesListPage';
 import AuditLogPage from '@/modules/audit/AuditLogPage';
 import SupportPage from '@/modules/support/SupportPage';
 import FinanceDashboardPage from '@/modules/finance/FinanceDashboardPage';
@@ -57,6 +59,10 @@ function AppShell() {
           <Route path="fleet" element={<CompaniesListPage />} />
           <Route path="fleet/create" element={<CompanyCreatePage />} />
           <Route path="fleet/:id" element={<CompanyDetailPage />} />
+        </Route>
+        <Route element={<PermissionGuard permission="FARE_MANAGE" />}>
+          <Route path="fares" element={<FareConfigsPage />} />
+          <Route path="places" element={<PlacesListPage />} />
         </Route>
         <Route element={<PermissionGuard permission="view_finance" />}>
           <Route path="finance" element={<FinanceDashboardPage />} />

@@ -809,7 +809,7 @@
         },
         {
           "name": "Mobile — Driver Onboarding",
-          "description": "Flutter driver signup / onboarding — run in order.\n\n**Primary signup API (no \"me\" in path):**\n- `POST /onboarding/driver` — basic identity after OTP (creates DriverProfile draft)\n- `GET /onboarding/status`\n\n**Then (existing APIs):** vehicle → documents → wait for approval → go online\n\n**Gates**\n- documents_uploaded = type driver_license only\n- can_drive only when onboardingStatus=approved + user ACTIVE\n\n**Auth:** Bearer {{accessToken}}. Phone from session.",
+          "description": "Flutter driver signup / onboarding — run in order.\n\n**Primary signup API (no \"me\" in path):**\n- `POST /onboarding/driver` — basic identity after OTP (creates DriverProfile draft)\n- `GET /onboarding/status`\n\n**Then (existing APIs):** vehicle → documents → wait for approval → go online\n\n**Gates**\n- documents_uploaded = license + national_id/passport + selfie files exist (any review status)\n- documents_approved / document_status = those latest files are approved (independent of driver_approved)\n- can_drive only when onboardingStatus=approved + user ACTIVE\n\n**Auth:** Bearer {{accessToken}}. Phone from session.",
           "item": [
             {
               "name": "01 List Regions",
@@ -1004,7 +1004,7 @@
                     "status"
                   ]
                 },
-                "description": "Expect next_steps: vehicle_info, documents_uploaded, driver_approved (as needed).",
+                "description": "Expect onboarding.documents_uploaded (files submitted) vs documents_approved / document_status (KYC review). Driver approval does not approve documents. next_steps may include vehicle_info, documents_uploaded, documents_approved, driver_approved.",
                 "auth": {
                   "type": "bearer",
                   "bearer": [

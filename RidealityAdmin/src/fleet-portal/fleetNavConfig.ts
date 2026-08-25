@@ -36,8 +36,42 @@ export interface FleetNavSection {
 const OWNER: FleetAccessTier[] = ['owner'];
 const REGIONAL: FleetAccessTier[] = ['regional'];
 const CITY_DESK: FleetAccessTier[] = ['regional', 'support'];
+const DRIVERS: FleetAccessTier[] = ['owner', 'regional', 'support', 'finance'];
+const OWNER_FINANCE: FleetAccessTier[] = ['owner'];
+const DRIVER_CREDITS: FleetAccessTier[] = ['owner', 'finance'];
 const LEAD: FleetAccessTier[] = ['owner', 'regional'];
-const ALL: FleetAccessTier[] = ['owner', 'regional', 'support'];
+const ALL: FleetAccessTier[] = ['owner', 'regional', 'support', 'finance'];
+
+const OWNER_NAV_SECTIONS: FleetNavSection[] = [
+  {
+    title: 'Finance',
+    items: [
+      { label: 'Wallet', segment: 'wallet', icon: AccountBalanceWalletIcon, visibleTo: OWNER_FINANCE },
+      { label: 'Driver credits', segment: 'driver-credits', icon: PaidIcon, visibleTo: DRIVER_CREDITS },
+      { label: 'Payouts', segment: 'payouts', icon: PaidIcon, visibleTo: OWNER_FINANCE },
+    ],
+  },
+  {
+    title: 'People',
+    items: [
+      { label: 'Drivers', segment: 'drivers', icon: PeopleIcon, visibleTo: DRIVERS },
+      { label: 'Team', segment: 'team', icon: GroupsIcon, visibleTo: LEAD },
+    ],
+  },
+  {
+    title: 'Company',
+    items: [
+      { label: 'About company', segment: 'companies', icon: BusinessIcon, visibleTo: OWNER },
+      { label: 'Cities', segment: 'regions', icon: LocationCityIcon, visibleTo: OWNER },
+    ],
+  },
+  {
+    title: 'Account',
+    items: [
+      { label: 'Notifications', segment: 'notifications', icon: NotificationsIcon, badge: 'unreadNotifications', visibleTo: ALL },
+    ],
+  },
+];
 
 export const FLEET_NAV_SECTIONS: FleetNavSection[] = [
   {
@@ -50,7 +84,7 @@ export const FLEET_NAV_SECTIONS: FleetNavSection[] = [
       { label: 'Cities', segment: 'regions', icon: LocationCityIcon, visibleTo: OWNER },
       { label: 'City desk', segment: 'city-desk', icon: SupportAgentIcon, visibleTo: CITY_DESK },
       { label: 'Tickets', segment: 'tickets', icon: ConfirmationNumberIcon, badge: 'pendingTickets', visibleTo: CITY_DESK },
-      { label: 'Drivers', segment: 'drivers', icon: PeopleIcon, visibleTo: CITY_DESK },
+      { label: 'Drivers', segment: 'drivers', icon: PeopleIcon, visibleTo: DRIVERS },
       { label: 'Vehicles', segment: 'vehicles', icon: DirectionsCarIcon, visibleTo: REGIONAL },
       { label: 'Documents', segment: 'documents', icon: FolderIcon, badge: 'pendingApprovals', visibleTo: REGIONAL },
       { label: 'Invitations', segment: 'invitations', icon: MailOutlineOutlinedIcon, badge: 'pendingInvites', visibleTo: REGIONAL },
@@ -60,16 +94,17 @@ export const FLEET_NAV_SECTIONS: FleetNavSection[] = [
   {
     title: 'Finance',
     items: [
-      { label: 'Wallet', segment: 'wallet', icon: AccountBalanceWalletIcon, visibleTo: OWNER },
-      { label: 'Transactions', segment: 'transactions', icon: ReceiptLongIcon, visibleTo: OWNER },
-      { label: 'Earnings', segment: 'earnings', icon: TrendingUpIcon, visibleTo: OWNER },
-      { label: 'Payouts', segment: 'payouts', icon: PaidIcon, visibleTo: OWNER },
+      { label: 'Wallet', segment: 'wallet', icon: AccountBalanceWalletIcon, visibleTo: OWNER_FINANCE },
+      { label: 'Transactions', segment: 'transactions', icon: ReceiptLongIcon, visibleTo: OWNER_FINANCE },
+      { label: 'Earnings', segment: 'earnings', icon: TrendingUpIcon, visibleTo: OWNER_FINANCE },
+      { label: 'Payouts', segment: 'payouts', icon: PaidIcon, visibleTo: OWNER_FINANCE },
+      { label: 'Driver credits', segment: 'driver-credits', icon: PaidIcon, visibleTo: DRIVER_CREDITS },
     ],
   },
   {
     title: 'Company',
     items: [
-      { label: 'Fleet company', segment: 'companies', icon: BusinessIcon, visibleTo: OWNER },
+      { label: 'About company', segment: 'companies', icon: BusinessIcon, visibleTo: OWNER },
       { label: 'Team Members', segment: 'team', icon: GroupsIcon, visibleTo: LEAD },
       { label: 'Reports', segment: 'reports', icon: AssessmentIcon, visibleTo: OWNER },
     ],
@@ -84,6 +119,8 @@ export const FLEET_NAV_SECTIONS: FleetNavSection[] = [
 ];
 
 export function getFleetNavSections(tier: FleetAccessTier | null): FleetNavSection[] {
+  if (tier === 'owner') return OWNER_NAV_SECTIONS;
+
   return FLEET_NAV_SECTIONS.map((section) => {
     const title =
       section.title === 'City operations' && tier === 'owner' ? 'Coverage' : section.title;
@@ -103,14 +140,20 @@ export const TIER_LABEL: Record<FleetAccessTier, string> = {
   owner: 'Fleet Owner',
   regional: 'Regional Fleet',
   support: 'Fleet Support',
+  finance: 'Fleet Finance',
 };
 
 export function fleetLandingSegment(tier: FleetAccessTier | null) {
-  return tier === 'owner' ? 'regions' : 'drivers';
+  if (tier === 'owner') return 'wallet';
+  if (tier === 'finance') return 'drivers';
+  return 'drivers';
 }
 
 /** Flat list for breadcrumb / lookups */
-export const FLEET_NAV_ITEMS: FleetNavItem[] = FLEET_NAV_SECTIONS.flatMap((s) => s.items);
+export const FLEET_NAV_ITEMS: FleetNavItem[] = [
+  ...OWNER_NAV_SECTIONS.flatMap((s) => s.items),
+  ...FLEET_NAV_SECTIONS.flatMap((s) => s.items),
+].filter((item, index, list) => list.findIndex((row) => row.segment === item.segment) === index);
 
 export function fleetPath(companyId: string, segment: string) {
   return `/portal/${companyId}/${segment}`;

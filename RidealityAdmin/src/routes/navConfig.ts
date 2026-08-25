@@ -8,6 +8,8 @@ import PublicIcon from '@mui/icons-material/Public';
 import SupportAgentIcon from '@mui/icons-material/SupportAgent';
 import AccountBalanceIcon from '@mui/icons-material/AccountBalance';
 import HistoryIcon from '@mui/icons-material/History';
+import PaymentsIcon from '@mui/icons-material/Payments';
+import PlaceIcon from '@mui/icons-material/Place';
 import type { SvgIconComponent } from '@mui/icons-material';
 
 export interface NavItem {
@@ -41,7 +43,6 @@ const FLEET_COMPANIES: AdminRole[] = ['SUB_ADMIN', ...GEO, 'FLEET_OWNER', 'REGIO
 const FINANCE_VIEW: AdminRole[] = [
   'FINANCE_USER',
   'FLEET_OWNER',
-  'FLEET_FINANCE',
   'GLOBAL_ADMIN',
   'CONTINENT_ADMIN',
   'COUNTRY_ADMIN',
@@ -151,6 +152,20 @@ export const NAV_GROUPS: NavGroup[] = [
         permission: ['manage_fleets', 'FLEET_VIEW'],
         anyPermission: true,
         visibleTo: FLEET_COMPANIES,
+      },
+      {
+        label: 'Fare config',
+        path: '/fares',
+        icon: PaymentsIcon,
+        permission: 'FARE_MANAGE',
+        visibleTo: GEO,
+      },
+      {
+        label: 'Popular places',
+        path: '/places',
+        icon: PlaceIcon,
+        permission: 'FARE_MANAGE',
+        visibleTo: GEO,
       },
       {
         label: 'Support',

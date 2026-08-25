@@ -54,6 +54,8 @@ export const PERMISSION_KEYS = {
   CONTINENT_CREATE: 'CONTINENT_CREATE',
   REGIONAL_VIEW: 'REGIONAL_VIEW',
   REGIONAL_CREATE: 'REGIONAL_CREATE',
+
+  FARE_MANAGE: 'FARE_MANAGE',
 } as const;
 
 export type PermissionKey = (typeof PERMISSION_KEYS)[keyof typeof PERMISSION_KEYS];
@@ -112,6 +114,8 @@ export const DEFAULT_PERMISSIONS: { key: PermissionKey; meaning: string }[] = [
   { key: PERMISSION_KEYS.CONTINENT_CREATE, meaning: 'Create continents' },
   { key: PERMISSION_KEYS.REGIONAL_VIEW, meaning: 'View provinces / regional subdivisions' },
   { key: PERMISSION_KEYS.REGIONAL_CREATE, meaning: 'Create provinces / regional subdivisions' },
+
+  { key: PERMISSION_KEYS.FARE_MANAGE, meaning: 'Add, edit, and delete city / country fare configs' },
 ];
 
 /** New scoped keys also satisfy existing requirePermission(legacy) checks. */
@@ -188,6 +192,7 @@ const GEO_ADMIN_DEFAULTS: PermissionKey[] = [
   PERMISSION_KEYS.COUNTRY_VIEW,
   PERMISSION_KEYS.REGIONAL_VIEW,
   PERMISSION_KEYS.CITY_VIEW,
+  PERMISSION_KEYS.FARE_MANAGE,
 ];
 
 export const ADMIN_ROLE_DEFAULTS: Record<Exclude<AdminRole, 'SUPER_ADMIN'>, PermissionKey[]> = {
@@ -245,6 +250,7 @@ export const ADMIN_ROLE_DEFAULTS: Record<Exclude<AdminRole, 'SUPER_ADMIN'>, Perm
     PERMISSION_KEYS.TICKET_ASSIGN,
     PERMISSION_KEYS.TICKET_RESPOND,
     PERMISSION_KEYS.CITY_VIEW,
+    PERMISSION_KEYS.FARE_MANAGE,
   ],
   FLEET_OWNER: [
     PERMISSION_KEYS.DRIVER_VIEW,
@@ -280,6 +286,7 @@ export const ADMIN_ROLE_DEFAULTS: Record<Exclude<AdminRole, 'SUPER_ADMIN'>, Perm
     PERMISSION_KEYS.WALLET_VIEW,
     PERMISSION_KEYS.PAYOUT_VIEW,
     PERMISSION_KEYS.FINANCE_REPORT_VIEW,
+    PERMISSION_KEYS.DRIVER_VIEW,
   ],
 };
 

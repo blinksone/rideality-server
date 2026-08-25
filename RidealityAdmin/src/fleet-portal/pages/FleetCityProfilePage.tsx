@@ -10,10 +10,12 @@ import {
   DialogActions,
   DialogContent,
   DialogTitle,
+  FormControlLabel,
   Link,
   List,
   ListItem,
   ListItemText,
+  Switch,
   Tab,
   Tabs,
   TextField,
@@ -30,6 +32,7 @@ import {
   getFleetCityProfile,
   reviewFleetComplaint,
   reviewFleetDocument,
+  updateFleetCityServices,
   updateFleetDriver,
   type FleetCityProfile,
 } from '@/api/fleet.api';
@@ -122,6 +125,16 @@ export default function FleetCityProfilePage() {
       notify.success('Document updated');
       setRejectTarget(null);
       setRejectionReason('');
+      invalidateCity();
+    },
+    onError: (e) => notify.error(getApiErrorMessage(e)),
+  });
+
+  const servicesMutation = useMutation({
+    mutationFn: (products: Array<{ code: string; enabled: boolean }>) =>
+      updateFleetCityServices(companyId, regionId, products),
+    onSuccess: () => {
+      notify.success('City services updated');
       invalidateCity();
     },
     onError: (e) => notify.error(getApiErrorMessage(e)),
@@ -416,6 +429,54 @@ export default function FleetCityProfilePage() {
 
       {tab === 0 && (
         <>
+          <FleetContentCard
+            title="Services in this city"
+            subtitle="What this fleet offers here. The rider confirm screen lists these products with city fares — not a custom fleet price list."
+          >
+            {(data?.services?.length ?? 0) === 0 ? (
+              <Typography color="text.secondary">No catalog products yet.</Typography>
+            ) : (
+              <Box>
+                {(['taxi', 'cargo'] as const).map((family) => {
+                  const rows = (data?.services ?? []).filter((s) => s.family === family);
+                  if (!rows.length) return null;
+                  return (
+                    <Box key={family} sx={{ mb: 1.5 }}>
+                      <Typography variant="subtitle2" sx={{ mb: 0.5 }}>
+                        {family === 'taxi' ? 'Taxi' : 'Cargo'}
+                      </Typography>
+                      {rows.map((row) => (
+                        <FormControlLabel
+                          key={row.code}
+                          sx={{ display: 'flex', ml: 0 }}
+                          control={
+                            <Switch
+                              checked={row.enabled}
+                              disabled={tier !== 'owner' || servicesMutation.isPending}
+                              onChange={(_, enabled) =>
+                                servicesMutation.mutate(
+                                  (data?.services ?? []).map((item) =>
+                                    item.code === row.code ? { code: item.code, enabled } : { code: item.code, enabled: item.enabled },
+                                  ),
+                                )
+                              }
+                            />
+                          }
+                          label={`${row.label} (${row.code})`}
+                        />
+                      ))}
+                    </Box>
+                  );
+                })}
+                {tier !== 'owner' && (
+                  <Typography variant="caption" color="text.secondary">
+                    Only the fleet owner can change services.
+                  </Typography>
+                )}
+              </Box>
+            )}
+          </FleetContentCard>
+
           <FleetContentCard title="Regional fleet" subtitle="City lead for drivers, vehicles, and documents">
             {(data?.regionalAdmins.length ?? 0) === 0 ? (
               <Typography color="text.secondary">No regional fleet admin for this city yet.</Typography>

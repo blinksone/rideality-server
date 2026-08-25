@@ -23,6 +23,7 @@ export default function FleetDashboardPage() {
   const membership = useActiveFleetMembership(companyId);
   const tier = useFleetAccessTier(companyId);
   const isOwner = tier === 'owner';
+  const isFinance = tier === 'finance';
   const canAccessCompany = Boolean(membership);
   const { data, isLoading } = useQuery({
     queryKey: ['fleet-dashboard', companyId],
@@ -55,6 +56,15 @@ export default function FleetDashboardPage() {
             <Button component={RouterLink} to={fleetPath(companyId, 'payouts')} variant="outlined" startIcon={<PaidIcon />} sx={{ borderColor: 'rgba(255,255,255,0.2)', color: '#fff' }}>
               Request payout
             </Button>
+          ) : isFinance ? (
+            <>
+              <Button component={RouterLink} to={fleetPath(companyId, 'drivers')} variant="contained" startIcon={<PeopleIcon />}>
+                Credit a driver
+              </Button>
+              <Button component={RouterLink} to={fleetPath(companyId, 'driver-credits')} variant="outlined" startIcon={<PaidIcon />} sx={{ borderColor: 'rgba(255,255,255,0.2)', color: '#fff' }}>
+                Credit requests
+              </Button>
+            </>
           ) : (
           <>
             <Button component={RouterLink} to={fleetPath(companyId, 'invitations')} variant="contained" startIcon={<AddIcon />}>

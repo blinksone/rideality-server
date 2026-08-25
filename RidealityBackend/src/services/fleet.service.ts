@@ -25,6 +25,8 @@ import {
   notStaffDriverUserFilter,
 } from './fleet-access';
 import { upsertAdminAssignment, scopedFleetCompanyWhere, type AdminAssignmentRecord } from './admin-scope.service';
+import { saveLocalUpload } from './user.service';
+import { isValidE164, normalizePhone } from '../utils/phone';
 
 export { assertFleetAccess, assertFleetDriverOps, assertFleetOwner, normalizeMemberRole } from './fleet-access';
 export type { FleetAccessContext, FleetAccessTier } from './fleet-access';
@@ -441,29 +443,70 @@ export async function getFleetCompany(companyId: string, requesterId: string) {
   });
 
   if (!company) throw new NotFoundError('Fleet company not found');
-  return company;
+  return { ...company, fleetTakePercent: Number(company.fleetTakePercent) };
+}
+
+function normalizeCompanyPhone(phone?: string | null): string | null | undefined {
+  if (phone === undefined) return undefined;
+  if (!phone?.trim()) return null;
+  const normalized = normalizePhone(phone);
+  if (!isValidE164(normalized)) {
+    throw new ValidationError('Enter a valid mobile number with country code, e.g. +923001234567');
+  }
+  return normalized;
 }
 
 export async function updateFleetCompany(
   companyId: string,
   requesterId: string,
-  data: { legalName?: string; taxId?: string | null },
+  data: {
+    legalName?: string;
+    taxId?: string | null;
+    phone?: string | null;
+    email?: string | null;
+    address?: string | null;
+    fleetTakePercent?: number;
+  },
 ) {
   await assertFleetOwner(companyId, requesterId);
 
   const existing = await prisma.fleetCompany.findUnique({ where: { id: companyId } });
   if (!existing) throw new NotFoundError('Fleet company not found');
 
-  // Fleet owners can update tax ID only; legal name is set by platform admin.
-  if (data.legalName !== undefined && data.legalName.trim() !== existing.legalName) {
-    throw new ForbiddenError('Legal name can only be changed by platform admin');
+  const nextLegalName = data.legalName !== undefined ? data.legalName.trim() : existing.legalName;
+  if (data.legalName !== undefined && nextLegalName !== existing.legalName) {
+    await assertUniqueLegalNameForOwner(nextLegalName, existing.ownerUserId, companyId);
   }
 
-  return prisma.fleetCompany.update({
+  const updated = await prisma.fleetCompany.update({
     where: { id: companyId },
     data: {
+      ...(data.legalName !== undefined ? { legalName: nextLegalName } : {}),
       ...(data.taxId !== undefined ? { taxId: normalizeTaxId(data.taxId) } : {}),
+      ...(data.phone !== undefined ? { phone: normalizeCompanyPhone(data.phone) } : {}),
+      ...(data.email !== undefined ? { email: data.email?.trim() || null } : {}),
+      ...(data.address !== undefined ? { address: data.address?.trim() || null } : {}),
+      ...(data.fleetTakePercent !== undefined ? { fleetTakePercent: data.fleetTakePercent } : {}),
     },
+  });
+  return { ...updated, fleetTakePercent: Number(updated.fleetTakePercent) };
+}
+
+const LOGO_MIME_TYPES = new Set(['image/jpeg', 'image/png', 'image/webp']);
+
+export async function updateFleetCompanyLogo(
+  companyId: string,
+  requesterId: string,
+  file: { originalname: string; buffer: Buffer; mimetype: string },
+) {
+  await assertFleetOwner(companyId, requesterId);
+  if (!LOGO_MIME_TYPES.has(file.mimetype)) {
+    throw new ValidationError('Logo must be a JPG, PNG, or WebP image');
+  }
+  const logoUrl = await saveLocalUpload(file.originalname, file.buffer);
+  return prisma.fleetCompany.update({
+    where: { id: companyId },
+    data: { logoUrl },
   });
 }
 
@@ -782,9 +825,12 @@ export async function listFleetDrivers(
   requesterId: string,
   query?: { fleetRegionId?: string },
 ) {
-  const access = await assertFleetDriverOps(companyId, requesterId, {
+  const access = await assertFleetAccess(companyId, requesterId, {
     fleetRegionId: query?.fleetRegionId,
   });
+  if (!access.canViewDrivers) {
+    throw new ForbiddenError('You cannot view drivers for this fleet');
+  }
 
   const drivers = await prisma.driverProfile.findMany({
     where: {

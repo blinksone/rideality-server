@@ -55,6 +55,7 @@ router.post(
 /**
  * GET /api/v1/onboarding/status
  * Wizard progress + capabilities (no "me" in path).
+ * documents_uploaded = files submitted; documents_approved / document_status = KYC review.
  */
 router.get('/status', async (req: AuthRequest, res, next) => {
   try {

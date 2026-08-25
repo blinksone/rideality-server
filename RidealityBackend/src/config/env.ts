@@ -68,6 +68,10 @@ const envSchema = z.object({
   FIREBASE_SERVICE_ACCOUNT_PATH: z.string().optional(),
   GOOGLE_APPLICATION_CREDENTIALS: z.string().optional(),
   FIREBASE_PROJECT_ID: z.string().optional(),
+  /** Server-side Google Places / Geocoding key. Never ship this to Flutter. */
+  GOOGLE_PLACES_API_KEY: z.string().optional(),
+  GOOGLE_PLACES_COUNTRY: z.string().default('pk'),
+  GOOGLE_PLACES_LANGUAGE: z.string().default('en'),
 });
 
 const parsed = envSchema.safeParse(sanitizeEnv(process.env));

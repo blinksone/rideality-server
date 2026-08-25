@@ -10,11 +10,14 @@ import {
   DialogContent,
   DialogTitle,
   FormControlLabel,
+  IconButton,
   Switch,
   TextField,
+  Tooltip,
   Typography,
 } from '@mui/material';
 import AddIcon from '@mui/icons-material/Add';
+import EditIcon from '@mui/icons-material/Edit';
 import { createRegion, listRegions, updateRegion } from '@/api/regions.api';
 import { getApiErrorMessage } from '@/api/client';
 import DataTable, { type DataTableColumn } from '@/components/DataTable';
@@ -29,7 +32,11 @@ const emptyForm: CreateRegionPayload = {
   name: '',
   currency: '',
   phonePrefix: '',
+  platformCommissionPercent: 0,
 };
+
+const commissionHelper =
+  'On completed rides the platform keeps the booking fee plus this % of (fare − booking fee). Example: fare 1,000, booking fee 50, 20% → platform 240, fleet/driver 760.';
 
 export default function RegionsListPage() {
   const [page, setPage] = useState(0);
@@ -108,6 +115,18 @@ export default function RegionsListPage() {
     setDialogOpen(true);
   };
 
+  const openEdit = (region: Region) => {
+    setEditing(region);
+    setSelectedCountry(null);
+    setEditForm({
+      name: region.name,
+      currency: region.currency,
+      phonePrefix: region.phonePrefix,
+      platformCommissionPercent: Number(region.platformCommissionPercent ?? 0),
+    });
+    setDialogOpen(true);
+  };
+
   const handleCountrySelect = (country: CountryOption | null) => {
     setSelectedCountry(country);
     if (!country) {
@@ -119,6 +138,7 @@ export default function RegionsListPage() {
       name: country.name,
       currency: country.currency,
       phonePrefix: country.phonePrefix,
+      platformCommissionPercent: form.platformCommissionPercent ?? 0,
     });
   };
 
@@ -129,6 +149,11 @@ export default function RegionsListPage() {
     { id: 'code', label: 'Code', render: (r) => r.code },
     { id: 'currency', label: 'Currency', render: (r) => r.currency },
     { id: 'phonePrefix', label: 'Phone prefix', render: (r) => r.phonePrefix },
+    {
+      id: 'platformCommissionPercent',
+      label: 'Platform commission',
+      render: (r) => `${Number(r.platformCommissionPercent ?? 0)}%`,
+    },
     {
       id: 'status',
       label: 'Status',
@@ -146,6 +171,11 @@ export default function RegionsListPage() {
       align: 'right',
       render: (r) => (
         <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 0.5 }}>
+          <Tooltip title="Edit region">
+            <IconButton size="small" onClick={() => openEdit(r)}>
+              <EditIcon fontSize="small" />
+            </IconButton>
+          </Tooltip>
           <FormControlLabel
             control={
               <Switch
@@ -168,7 +198,7 @@ export default function RegionsListPage() {
     <>
       <PageHeader
         title="Regions"
-        subtitle="Manage countries and markets available for fleets and users."
+        subtitle="Manage countries, markets, and platform commission for completed rides."
         actions={
           <Button variant="contained" startIcon={<AddIcon />} onClick={openCreate}>
             Add region
@@ -228,6 +258,21 @@ export default function RegionsListPage() {
                 value={editForm.phonePrefix ?? ''}
                 onChange={(e) => setEditForm((f) => ({ ...f, phonePrefix: e.target.value }))}
                 helperText="e.g. +1, +92"
+                required
+                fullWidth
+              />
+              <TextField
+                label="Platform commission %"
+                type="number"
+                value={editForm.platformCommissionPercent ?? 0}
+                onChange={(e) =>
+                  setEditForm((f) => ({
+                    ...f,
+                    platformCommissionPercent: Number(e.target.value),
+                  }))
+                }
+                inputProps={{ min: 0, max: 100, step: 0.01 }}
+                helperText={commissionHelper}
                 required
                 fullWidth
               />
@@ -299,6 +344,18 @@ export default function RegionsListPage() {
                   />
                 </Box>
               )}
+
+              <TextField
+                label="Platform commission %"
+                type="number"
+                value={form.platformCommissionPercent ?? 0}
+                onChange={(e) =>
+                  setForm((f) => ({ ...f, platformCommissionPercent: Number(e.target.value) }))
+                }
+                inputProps={{ min: 0, max: 100, step: 0.01 }}
+                helperText={commissionHelper}
+                fullWidth
+              />
             </>
           )}
         </DialogContent>

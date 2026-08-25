@@ -15,6 +15,7 @@ import adminPortalRoutes from '../routes/admin.portal.routes';
 import adminRegionRoutes from '../routes/admin.region.routes';
 import adminFleetRoutes from '../routes/admin.fleet.routes';
 import adminFinanceRoutes from '../routes/admin.finance.routes';
+import adminFareRoutes from '../routes/admin.fare.routes';
 import fleetRoutes from '../routes/fleet.routes';
 import internalFinanceRoutes from '../routes/internal.finance.routes';
 import tripRoutes from '../routes/trip.routes';
@@ -58,6 +59,7 @@ function mountAdmin(api: Router) {
   api.use('/admin/roles', roleRouter);
   api.use('/admin', adminPortalRoutes);
   api.use('/admin/regions', adminRegionRoutes);
+  api.use('/admin/fares', adminFareRoutes);
 }
 
 const mountByService: Record<Exclude<ServiceId, 'gateway'>, (api: Router) => void> = {

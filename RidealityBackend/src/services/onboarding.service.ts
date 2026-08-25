@@ -5,17 +5,66 @@ import {
 } from '@prisma/client';
 import { prisma } from '../lib/prisma';
 
+/** Review state of the latest required KYC set (license + ID/passport + selfie). */
+export type DocumentReviewStatus =
+  | 'missing'
+  | 'pending'
+  | 'approved'
+  | 'rejected'
+  | 'expired';
+
 export interface OnboardingStatus {
   phone_verified: boolean;
   personal_info: boolean;
   role_selected: boolean;
   vehicle_info: boolean;
+  /** Required document files exist (any status). Do not treat this as approved. */
   documents_uploaded: boolean;
+  /** Latest required documents are all DocumentStatus.approved. */
+  documents_approved: boolean;
+  document_status: DocumentReviewStatus;
   locations_saved: boolean;
   driver_approved: boolean;
   profile_complete: boolean;
   pending_steps: string[];
   is_driver: boolean;
+}
+
+function requiredDocumentSlots<T extends { type: string }>(latestDocuments: T[]) {
+  return {
+    license: latestDocuments.find((d) => d.type === 'driver_license'),
+    identity: latestDocuments.find(
+      (d) => d.type === 'national_id' || d.type === 'passport',
+    ),
+    selfie: latestDocuments.find((d) => d.type === 'selfie'),
+  };
+}
+
+function documentReview(
+  latestDocuments: { type: string; status: DocumentStatus }[],
+): {
+  uploaded: boolean;
+  approved: boolean;
+  status: DocumentReviewStatus;
+} {
+  const slots = requiredDocumentSlots(latestDocuments);
+  const required = [slots.license, slots.identity, slots.selfie];
+  const uploaded = required.every(Boolean);
+  if (!uploaded) {
+    return { uploaded: false, approved: false, status: 'missing' };
+  }
+
+  const statuses = required.map((d) => d!.status);
+  if (statuses.some((s) => s === DocumentStatus.rejected)) {
+    return { uploaded: true, approved: false, status: 'rejected' };
+  }
+  if (statuses.some((s) => s === DocumentStatus.expired)) {
+    return { uploaded: true, approved: false, status: 'expired' };
+  }
+  if (statuses.every((s) => s === DocumentStatus.approved)) {
+    return { uploaded: true, approved: true, status: 'approved' };
+  }
+  return { uploaded: true, approved: false, status: 'pending' };
 }
 
 export async function computeOnboarding(userId: string): Promise<OnboardingStatus> {
@@ -48,10 +97,7 @@ export async function computeOnboarding(userId: string): Promise<OnboardingStatu
   const isDriver = !!user.driverProfile;
   const roleSelected = isDriver || user.activeMode === 'passenger';
   const vehicleInfo = !!user.driverProfile?.vehicle;
-  const documentsUploaded =
-    latestDocuments.some((d) => d.type === 'driver_license') &&
-    latestDocuments.some((d) => d.type === 'national_id' || d.type === 'passport') &&
-    latestDocuments.some((d) => d.type === 'selfie');
+  const docReview = documentReview(latestDocuments);
   const locationsSaved = user.savedLocations.length > 0;
   const driverApproved =
     user.driverProfile?.onboardingStatus === DriverOnboardingStatus.approved;
@@ -61,7 +107,10 @@ export async function computeOnboarding(userId: string): Promise<OnboardingStatu
   if (!personalInfo) pendingSteps.push('personal_info');
   if (!roleSelected) pendingSteps.push('role_selected');
   if (isDriver && !vehicleInfo) pendingSteps.push('vehicle_info');
-  if (isDriver && !documentsUploaded) pendingSteps.push('documents_uploaded');
+  if (isDriver && !docReview.uploaded) pendingSteps.push('documents_uploaded');
+  if (isDriver && docReview.uploaded && !docReview.approved) {
+    pendingSteps.push('documents_approved');
+  }
   if (!locationsSaved) pendingSteps.push('locations_saved');
   if (isDriver && !driverApproved) pendingSteps.push('driver_approved');
 
@@ -69,14 +118,16 @@ export async function computeOnboarding(userId: string): Promise<OnboardingStatu
     phoneVerified &&
     personalInfo &&
     locationsSaved &&
-    (!isDriver || (vehicleInfo && documentsUploaded && driverApproved));
+    (!isDriver || (vehicleInfo && docReview.approved && driverApproved));
 
   return {
     phone_verified: phoneVerified,
     personal_info: personalInfo,
     role_selected: roleSelected,
     vehicle_info: vehicleInfo,
-    documents_uploaded: documentsUploaded,
+    documents_uploaded: docReview.uploaded,
+    documents_approved: docReview.approved,
+    document_status: docReview.status,
     locations_saved: locationsSaved,
     driver_approved: driverApproved,
     profile_complete: profileComplete,

@@ -5,6 +5,7 @@ import { logger } from '../lib/logger';
 import { REALTIME } from '../realtime/constants';
 import { makeEvent, publishDomainEvent } from '../realtime/domainEvents';
 import { searchNearbyDrivers } from './location.service';
+import { normalizeVehicleType } from './service-product.service';
 import { transitionRide } from './tripStateMachine.service';
 import { notifyDispatchOffer, notifyNoDrivers } from './push.service';
 import { modesAllow, vehicleCanCarry, type ServiceMode } from './cargo.service';
@@ -78,8 +79,9 @@ function candidateOkForBooking(
   if (!modesAllow(caps.serviceModes, needed)) return false;
 
   if (ride.vehicleType) {
-    const vt = (caps.vehicleType || geoVehicleType || '').toLowerCase();
-    if (vt && vt !== ride.vehicleType.toLowerCase()) return false;
+    const wanted = normalizeVehicleType(ride.vehicleType);
+    const have = normalizeVehicleType(caps.vehicleType || geoVehicleType);
+    if (wanted && have && wanted !== have) return false;
   }
 
   if (ride.bookingType === BookingType.cargo) {

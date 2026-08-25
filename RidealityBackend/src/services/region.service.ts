@@ -3,6 +3,13 @@ import { prisma } from '../lib/prisma';
 import { ConflictError, ForbiddenError, NotFoundError, ValidationError } from '../utils/errors';
 import { isSuperAdminRole, type AdminAssignmentRecord } from './admin-scope.service';
 
+function formatRegion<T extends { platformCommissionPercent: Prisma.Decimal | number }>(region: T) {
+  return {
+    ...region,
+    platformCommissionPercent: Number(region.platformCommissionPercent),
+  };
+}
+
 function countryFilter(assignment?: AdminAssignmentRecord | null): Prisma.RegionWhereInput {
   if (!assignment || isSuperAdminRole(assignment.role) || assignment.scopeType === 'PLATFORM' || assignment.scopeType === 'GLOBAL') {
     return {};
@@ -186,13 +193,13 @@ export async function listRegions(query: {
     prisma.region.count({ where }),
   ]);
 
-  return { regions, total };
+  return { regions: regions.map(formatRegion), total };
 }
 
 export async function getRegion(regionId: string) {
   const region = await prisma.region.findUnique({ where: { id: regionId } });
   if (!region) throw new NotFoundError('Region not found');
-  return region;
+  return formatRegion(region);
 }
 
 export async function createRegion(data: {
@@ -200,19 +207,22 @@ export async function createRegion(data: {
   name: string;
   currency: string;
   phonePrefix: string;
+  platformCommissionPercent?: number;
 }) {
   const existing = await prisma.region.findUnique({ where: { code: data.code } });
   if (existing) throw new ConflictError('Region code already exists', 'REGION_CODE_EXISTS');
 
-  return prisma.region.create({
+  const created = await prisma.region.create({
     data: {
       code: data.code.toUpperCase(),
       name: data.name,
       currency: data.currency.toUpperCase(),
       phonePrefix: data.phonePrefix,
       isActive: true,
+      platformCommissionPercent: data.platformCommissionPercent ?? 0,
     },
   });
+  return formatRegion(created);
 }
 
 export async function updateRegion(
@@ -222,19 +232,24 @@ export async function updateRegion(
     currency?: string;
     phonePrefix?: string;
     isActive?: boolean;
+    platformCommissionPercent?: number;
   },
 ) {
   await getRegion(regionId);
 
-  return prisma.region.update({
+  const updated = await prisma.region.update({
     where: { id: regionId },
     data: {
       ...(data.name !== undefined ? { name: data.name } : {}),
       ...(data.currency !== undefined ? { currency: data.currency.toUpperCase() } : {}),
       ...(data.phonePrefix !== undefined ? { phonePrefix: data.phonePrefix } : {}),
       ...(data.isActive !== undefined ? { isActive: data.isActive } : {}),
+      ...(data.platformCommissionPercent !== undefined
+        ? { platformCommissionPercent: data.platformCommissionPercent }
+        : {}),
     },
   });
+  return formatRegion(updated);
 }
 
 export async function assertActiveRegion(regionId: string) {

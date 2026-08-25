@@ -39,8 +39,10 @@ import type { FleetCompanyStatus, FleetDriver, UserListItem } from '@/api/types'
 import { formatDate, formatLabel } from '@/utils/format';
 import { useDebounce } from '@/hooks/useDebounce';
 import FleetWalletPanel from '@/modules/finance/FleetWalletPanel';
+import FleetCompanyProfileForm from '@/modules/fleet/FleetCompanyProfileForm';
+import FleetDriverCreditsTable from '@/fleet-portal/components/FleetDriverCreditsTable';
 
-type FleetTab = 'overview' | 'drivers' | 'wallet';
+type FleetTab = 'overview' | 'drivers' | 'wallet' | 'credits';
 
 function statusColor(status: string): 'default' | 'success' | 'warning' | 'error' {
   if (status === 'active') return 'success';
@@ -65,7 +67,7 @@ export default function CompanyDetailPage() {
   const notify = useNotify();
   const queryClient = useQueryClient();
   const { can, isSuperAdmin } = usePermissions();
-  const { role, scopeType, cityId } = useAdminScope();
+  const { role, scopeType, cityId, isFleetOwner } = useAdminScope();
   const canManageFleet = can('manage_fleets');
   const canAssignOwner =
     isSuperAdmin ||
@@ -73,16 +75,19 @@ export default function CompanyDetailPage() {
     role === 'CONTINENT_ADMIN' ||
     role === 'COUNTRY_ADMIN' ||
     role === 'SUB_ADMIN';
+  const canEditProfile = isFleetOwner || canAssignOwner;
   const canViewWallet = canManageFleet || can('view_finance') || can('WALLET_VIEW');
   const canViewDrivers = canManageFleet || can('manage_drivers') || can('DRIVER_VIEW');
   const isCityScoped = scopeType === 'CITY';
 
+  const canReviewCredits = isFleetOwner || isSuperAdmin;
   const tabs = useMemo(() => {
     const items: { key: FleetTab; label: string }[] = [{ key: 'overview', label: 'Overview' }];
     if (canViewDrivers) items.push({ key: 'drivers', label: 'Drivers' });
     if (canViewWallet) items.push({ key: 'wallet', label: 'Wallet' });
+    if (canReviewCredits) items.push({ key: 'credits', label: 'Driver credits' });
     return items;
-  }, [canViewDrivers, canViewWallet]);
+  }, [canReviewCredits, canViewDrivers, canViewWallet]);
 
   const { data: company, isLoading } = useQuery({
     queryKey: ['fleet-company', id],
@@ -268,7 +273,7 @@ export default function CompanyDetailPage() {
 
       {tab === 'overview' && (
         <Grid container spacing={2}>
-          <Grid size={{ xs: 12, md: canAssignOwner ? 6 : 12 }}>
+          <Grid size={{ xs: 12, md: canEditProfile ? 5 : 12 }}>
             <Paper variant="outlined" sx={{ p: 2 }}>
               <Typography variant="subtitle2" gutterBottom>
                 Details
@@ -290,9 +295,26 @@ export default function CompanyDetailPage() {
                 Operating {operatingCityNames.length === 1 ? 'city' : 'cities'}:{' '}
                 {operatingCityNames.length ? operatingCityNames.join(', ') : '—'}
               </Typography>
+              <Typography variant="body2">
+                Fleet take: {Number(company.fleetTakePercent ?? 0)}% of trip net after platform commission
+              </Typography>
               <Typography variant="body2">Created: {formatDate(company.createdAt)}</Typography>
             </Paper>
           </Grid>
+          {canEditProfile && (
+            <Grid size={{ xs: 12, md: 7 }}>
+              <Paper variant="outlined" sx={{ p: 2 }}>
+                <Typography variant="subtitle2" gutterBottom>
+                  Public company profile
+                </Typography>
+                <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+                  Drivers see this name, logo, phone, email, and address when they choose your fleet.
+                  Changing these does not change your login email or phone.
+                </Typography>
+                <FleetCompanyProfileForm company={company} />
+              </Paper>
+            </Grid>
+          )}
           {canAssignOwner && (
           <Grid size={{ xs: 12, md: 6 }}>
             <Paper variant="outlined" sx={{ p: 2 }}>
@@ -448,6 +470,18 @@ export default function CompanyDetailPage() {
       )}
 
       {tab === 'wallet' && canViewWallet && <FleetWalletPanel fleetId={id} />}
+
+      {tab === 'credits' && canReviewCredits && (
+        <Paper variant="outlined" sx={{ p: 2 }}>
+          <Typography variant="subtitle2" gutterBottom>
+            Driver credits
+          </Typography>
+          <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+            Fleet Finance records cash or bank payments to a driver. Approve to credit their wallet, or reject.
+          </Typography>
+          <FleetDriverCreditsTable companyId={id} canReview />
+        </Paper>
+      )}
 
       <ConfirmDialog
         open={Boolean(removeDriverId)}

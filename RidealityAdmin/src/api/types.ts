@@ -70,7 +70,8 @@ export type PermissionKey =
   | 'CONTINENT_VIEW'
   | 'CONTINENT_CREATE'
   | 'REGIONAL_VIEW'
-  | 'REGIONAL_CREATE';
+  | 'REGIONAL_CREATE'
+  | 'FARE_MANAGE';
 
 export type UserStatus = 'ACTIVE' | 'SUSPENDED' | 'BANNED' | 'PENDING';
 
@@ -157,7 +158,7 @@ export interface PortalUser {
   canInvite?: AdminRole[];
 }
 
-export type FleetAccessTier = 'owner' | 'regional' | 'support';
+export type FleetAccessTier = 'owner' | 'regional' | 'support' | 'finance';
 
 export interface FleetMembershipSummary {
   id: string;
@@ -385,10 +386,15 @@ export interface FleetCompany {
   id: string;
   legalName: string;
   taxId?: string | null;
+  phone?: string | null;
+  email?: string | null;
+  address?: string | null;
+  logoUrl?: string | null;
   status: string;
   statusReason?: string | null;
   regionId: string;
   ownerUserId: string;
+  fleetTakePercent?: number;
   createdAt: string;
   updatedAt: string;
   region?: { id: string; code: string; name: string; phonePrefix?: string; currency?: string };
@@ -429,6 +435,7 @@ export interface Region {
   phonePrefix: string;
   continentId?: string | null;
   isActive?: boolean;
+  platformCommissionPercent?: number;
   createdAt?: string;
 }
 
@@ -453,11 +460,89 @@ export interface GeoCity {
   fleetCompany?: { id: string; legalName: string; regionId: string };
 }
 
+export type FareProduct = 'ride' | 'cargo';
+
+export interface ServiceProduct {
+  code: string;
+  label: string;
+  family: 'taxi' | 'cargo';
+  sortOrder: number;
+  fareMultiplier: number;
+}
+
+export interface FareConfig {
+  id: string;
+  countryId: string;
+  cityId: string | null;
+  product: FareProduct;
+  serviceProductCode: string | null;
+  productLabel: string | null;
+  currency: string;
+  baseFare: number;
+  perKm: number;
+  perMinute: number;
+  minimumFare: number;
+  bookingFee: number;
+  cancellationFee: number;
+  cargoPerKg: number;
+  isCountryDefault: boolean;
+  countryName: string | null;
+  countryCode: string | null;
+  cityName: string | null;
+  provinceName: string | null;
+  canEdit: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface FareConfigPayload {
+  countryId: string;
+  cityId?: string | null;
+  product?: FareProduct;
+  serviceProductCode?: string;
+  baseFare: number;
+  perKm: number;
+  perMinute: number;
+  minimumFare: number;
+  bookingFee: number;
+  cancellationFee?: number;
+  cargoPerKg?: number;
+}
+
+export interface AdminPlace {
+  id: string;
+  name: string;
+  address: string | null;
+  latitude: number;
+  longitude: number;
+  city: string | null;
+  area: string | null;
+  type: string | null;
+  source: string;
+  priority: number;
+  usageCount: number;
+  isActive: boolean;
+  googlePlaceId: string | null;
+}
+
+export interface AdminPlacePayload {
+  name: string;
+  formattedAddress?: string;
+  latitude: number;
+  longitude: number;
+  city?: string;
+  area?: string;
+  type?: string;
+  priority?: number;
+  googlePlaceId?: string;
+}
+
 export interface CreateRegionPayload {
   code: string;
   name: string;
   currency: string;
   phonePrefix: string;
+  platformCommissionPercent?: number;
 }
 
 export interface UpdateRegionPayload {
@@ -465,6 +550,7 @@ export interface UpdateRegionPayload {
   currency?: string;
   phonePrefix?: string;
   isActive?: boolean;
+  platformCommissionPercent?: number;
 }
 
 export interface FleetInvite {
@@ -568,6 +654,11 @@ export interface FinanceAdjustment {
   wallet?: { id: string; ownerType: string; currency: string; ownerLabel: string };
   requestedBy?: { id: string; email: string | null; fullName: string | null };
   reviewedBy?: { id: string; email: string | null; fullName: string | null } | null;
+}
+
+export interface FleetDriverCredit extends FinanceAdjustment {
+  driverUserId?: string | null;
+  driverPhone?: string | null;
 }
 
 export interface FinanceSummary {

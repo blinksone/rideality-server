@@ -1,6 +1,6 @@
 import { PlatformRole, Prisma } from '@prisma/client';
 import { prisma } from '../lib/prisma';
-import { PERMISSION_KEYS, expandPermissionAliases } from '../constants/permissions';
+import { PERMISSION_KEYS, DEFAULT_PERMISSIONS, expandPermissionAliases } from '../constants/permissions';
 import { assignmentPermissionKeys } from './admin-scope.service';
 import {
   ConflictError,
@@ -173,6 +173,16 @@ export async function resolveUserPermissionKeys(userId: string): Promise<string[
 }
 
 // ─── Permissions catalog ─────────────────────────────────────────────────────
+
+export async function ensureSystemPermissions() {
+  for (const p of DEFAULT_PERMISSIONS) {
+    await prisma.permission.upsert({
+      where: { key: p.key },
+      create: { key: p.key, meaning: p.meaning, isSystem: true },
+      update: { meaning: p.meaning, isSystem: true },
+    });
+  }
+}
 
 export async function listPermissions(query: { page: number; limit: number; search?: string }) {
   const { page, limit } = query;

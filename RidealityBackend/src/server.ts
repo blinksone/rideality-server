@@ -5,9 +5,11 @@ import { connectDatabase, disconnectDatabase } from './lib/prisma';
 import { connectRedis, disconnectRedis } from './lib/redis';
 import { startLocationSweep, stopLocationSweep } from './services/location.service';
 import { initFirebase, isFcmReady } from './services/push.service';
+import { ensureSystemPermissions } from './services/permission.service';
 
 async function main() {
   await connectDatabase();
+  await ensureSystemPermissions();
   await connectRedis();
   startLocationSweep(15_000);
   initFirebase();

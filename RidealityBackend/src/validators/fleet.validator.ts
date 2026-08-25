@@ -35,6 +35,26 @@ export const createFleetSchema = z.object({
 export const updateFleetSchema = z.object({
   legalName: legalNameSchema.optional(),
   taxId: taxIdSchema.nullable().optional(),
+  phone: z
+    .string()
+    .trim()
+    .max(20)
+    .nullable()
+    .optional()
+    .transform((value) => (value ? value : null)),
+  email: z
+    .union([z.string().trim().email('Enter a valid company email').max(254), z.literal('')])
+    .nullable()
+    .optional()
+    .transform((value) => (value ? value : null)),
+  address: z
+    .string()
+    .trim()
+    .max(250)
+    .nullable()
+    .optional()
+    .transform((value) => (value ? value : null)),
+  fleetTakePercent: z.coerce.number().min(0).max(100).optional(),
 });
 
 export const listFleetsSchema = z.object({
@@ -188,6 +208,18 @@ export const reviewFleetDocumentSchema = z.object({
 export const publicFleetCompaniesQuerySchema = z.object({
   regionId: z.string().uuid().optional(),
   regionCode: z.string().trim().min(2).max(8).optional(),
+  cityId: z.string().uuid().optional(),
+  search: z.string().trim().min(1).max(80).optional(),
+  sort: z.enum(['top', 'name']).optional(),
+  limit: z.coerce.number().int().min(1).max(50).default(20),
+});
+
+export const publicFleetCitiesQuerySchema = z.object({
+  regionId: z.string().uuid(),
+});
+
+export const publicFleetCompanyDetailQuerySchema = z.object({
+  cityId: z.string().uuid().optional(),
 });
 
 export const fleetDriversQuerySchema = z.object({
@@ -196,4 +228,23 @@ export const fleetDriversQuerySchema = z.object({
 
 export const reviewFleetComplaintSchema = z.object({
   status: z.enum(['in_review', 'resolved']),
+});
+
+export const createFleetDriverCreditSchema = z.object({
+  driverUserId: z.string().uuid(),
+  amount: z.coerce.number().positive().max(9_999_999_999.99, 'Amount exceeds maximum allowed'),
+  reason: z.string().trim().min(3).max(500),
+  topupMethod: z.enum(['cash', 'bank_transfer', 'admin_manual', 'gateway']),
+  externalRef: z.string().trim().max(120).optional(),
+});
+
+export const listFleetDriverCreditsQuerySchema = z.object({
+  status: z.enum(['pending', 'approved', 'rejected']).optional(),
+  page: z.coerce.number().int().min(1).default(1),
+  limit: z.coerce.number().int().min(1).max(100).default(20),
+});
+
+export const reviewFleetDriverCreditSchema = z.object({
+  action: z.enum(['approve', 'reject']),
+  reviewNote: z.string().trim().max(500).optional(),
 });

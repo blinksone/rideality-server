@@ -10,6 +10,8 @@ export const listRegionsSchema = z.object({
     .transform((v) => (v === undefined ? undefined : v === 'true')),
 });
 
+const platformCommissionPercent = z.coerce.number().min(0).max(100);
+
 export const createRegionSchema = z.object({
   code: z
     .string()
@@ -24,6 +26,7 @@ export const createRegionSchema = z.object({
   phonePrefix: z
     .string()
     .regex(/^\+\d{1,4}$/, 'Phone prefix must start with + followed by digits'),
+  platformCommissionPercent: platformCommissionPercent.default(0),
 });
 
 export const updateRegionSchema = z.object({
@@ -38,6 +41,7 @@ export const updateRegionSchema = z.object({
     .regex(/^\+\d{1,4}$/)
     .optional(),
   isActive: z.boolean().optional(),
+  platformCommissionPercent: platformCommissionPercent.optional(),
 });
 
 export const createCitySchema = z.object({

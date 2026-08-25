@@ -8,6 +8,8 @@ import {
 } from './tripStateMachine.service';
 import { startDispatch, listDispatchLogs } from './dispatch.service';
 import { haversineMeters } from './location.service';
+import { estimateTripFare } from './fare.service';
+import { normalizeVehicleType, quoteTrip } from './service-product.service';
 import {
   ensureCargoProofRow,
   formatCargoProofPublic,
@@ -23,6 +25,7 @@ export interface CreateTripInput {
   dropoffAddress?: string;
   vehicleType?: string;
   currency?: string;
+  cityId?: string;
   /** Default ride. Use cargo for package delivery. */
   bookingType?: 'ride' | 'cargo';
   cargoWeightKg?: number;
@@ -30,16 +33,6 @@ export interface CreateTripInput {
   cargoSizeTier?: string;
   /** Default otp for cargo */
   dropoffProofType?: 'otp' | 'photo';
-}
-
-function estimateFare(distanceMeters: number, cargoWeightKg?: number): number {
-  // Simple PKR heuristic: base 150 + 40/km (+ weight surcharge for cargo)
-  const km = distanceMeters / 1000;
-  let fare = 150 + km * 40;
-  if (cargoWeightKg != null && cargoWeightKg > 0) {
-    fare += cargoWeightKg * 8; // PKR / kg
-  }
-  return Math.round(fare * 100) / 100;
 }
 
 export function formatTrip(
@@ -131,6 +124,46 @@ export function formatTrip(
 }
 
 /**
+ * Confirm-screen quote: taxi/cargo product list with fares. Does not create a ride.
+ */
+export async function quoteTripForUser(
+  passengerUserId: string,
+  input: {
+    pickupLat: number;
+    pickupLng: number;
+    dropoffLat: number;
+    dropoffLng: number;
+    bookingType?: 'ride' | 'cargo';
+    cityId?: string;
+    cargoWeightKg?: number;
+  },
+) {
+  if (
+    !Number.isFinite(input.pickupLat) ||
+    !Number.isFinite(input.pickupLng) ||
+    !Number.isFinite(input.dropoffLat) ||
+    !Number.isFinite(input.dropoffLng)
+  ) {
+    throw new ValidationError('Invalid coordinates');
+  }
+  const passenger = await prisma.user.findUnique({
+    where: { id: passengerUserId },
+    select: { regionId: true },
+  });
+  if (!passenger) throw new NotFoundError('User not found');
+  return quoteTrip({
+    countryId: passenger.regionId,
+    cityId: input.cityId,
+    pickupLat: input.pickupLat,
+    pickupLng: input.pickupLng,
+    dropoffLat: input.dropoffLat,
+    dropoffLng: input.dropoffLng,
+    bookingType: input.bookingType === 'cargo' ? 'cargo' : 'ride',
+    cargoWeightKg: input.cargoWeightKg,
+  });
+}
+
+/**
  * Rider creates a trip in REQUESTED and fires async dispatch.
  */
 export async function createTrip(passengerUserId: string, input: CreateTripInput) {
@@ -158,16 +191,25 @@ export async function createTrip(passengerUserId: string, input: CreateTripInput
     input.dropoffLat,
     input.dropoffLng,
   );
-  const fareEstimate = estimateFare(
-    distanceM,
-    bookingType === BookingType.cargo ? input.cargoWeightKg : undefined,
-  );
 
   const passenger = await prisma.user.findUnique({
     where: { id: passengerUserId },
     include: { profile: true, region: true },
   });
   if (!passenger) throw new NotFoundError('User not found');
+
+  const quoted = await estimateTripFare({
+    countryId: passenger.regionId,
+    cityId: input.cityId,
+    product: bookingType === BookingType.cargo ? 'cargo' : 'ride',
+    serviceProductCode:
+      bookingType === BookingType.cargo
+        ? 'cargo'
+        : normalizeVehicleType(input.vehicleType) ?? 'economy',
+    distanceMeters: distanceM,
+    cargoWeightKg: bookingType === BookingType.cargo ? input.cargoWeightKg : undefined,
+  });
+  const fareEstimate = quoted.fare;
 
   const active = await prisma.ride.findFirst({
     where: {
@@ -225,9 +267,11 @@ export async function createTrip(passengerUserId: string, input: CreateTripInput
       dropoffProofType,
       fare: fareEstimate,
       fareEstimate,
+      bookingFee: quoted.bookingFee,
+      platformCommissionPercent: quoted.platformCommissionPercent,
       distanceKm: Math.round((distanceM / 1000) * 100) / 100,
-      currency: input.currency ?? passenger.region.currency,
-      vehicleType: input.vehicleType ?? 'sedan',
+      currency: input.currency ?? quoted.currency ?? passenger.region.currency,
+      vehicleType: normalizeVehicleType(input.vehicleType) ?? input.vehicleType ?? 'economy',
     },
     include: { cargoProof: true },
   });

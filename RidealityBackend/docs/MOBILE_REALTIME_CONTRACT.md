@@ -34,6 +34,33 @@ Gateway **rejects** the socket if the JWT is missing/invalid.
 
 | Method | Path | Body / notes |
 |--------|------|----------------|
+| `GET` | `/trips/catalog` | Platform products (bike, rickshaw, economy, ac, cargo) |
+| `POST` | `/trips/quote` | Confirm screen fares. Does **not** create a ride. See [TAXI.md](./TAXI.md) |
+| `POST` | `/trips` | `{ pickupLat, pickupLng, dropoffLat, dropoffLng, vehicleType: "economy", bookingType?: "ride" }` → creates ride in `requested` |
+| `GET` | `/trips/:id` | Trip status + parties |
+| `POST` | `/trips/:id/cancel` | `{ reason? }` |
+| `POST` | `/trips/:id/status` | Driver advances FSM: `{ status: "driver_en_route" \| "arrived" \| "picked_up" \| "completed" }` |
+| `POST` | `/trips/:id/dispatch-response` | `{ accepted: bool }` REST fallback if WS fails |
+| `GET` | `/trips/:id/dispatch-log` | Offer audit rows |
+
+## REST — pickup places (Yango-style)
+
+See [PICKUP_LOCATION.md](./PICKUP_LOCATION.md).  
+Taxi confirm (quote + request): [TAXI.md](./TAXI.md).
+
+| Method | Path | Notes |
+|--------|------|--------|
+| `GET` | `/places/suggestions?latitude=&longitude=` | Open picker: current + Home/Work + recents + nearby DB |
+| `GET` | `/places/nearby?latitude=&longitude=` | Nearby from **our DB**, not Google |
+| `GET` | `/places/search?query=` | Our catalog first, then Google autocomplete (proxy; debounce in app) |
+| `POST` | `/places/select` | User tapped a result → upsert if Google, bump usage, return selected location |
+
+Do **not** save Google predictions until `POST /places/select`. Map pin / current GPS resolves address and does not create a popular-place row.
+
+---
+
+| Method | Path | Body / notes |
+|--------|------|----------------|
 | `POST` | `/trips` | `{ pickupLat, pickupLng, dropoffLat, dropoffLng, pickupAddress?, dropoffAddress?, vehicleType? }` → creates `Ride` in `requested`, returns trip JSON immediately. Matching runs **async**. |
 | `GET` | `/trips/:id` | Trip status + parties |
 | `POST` | `/trips/:id/cancel` | `{ reason? }` |

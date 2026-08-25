@@ -9,8 +9,21 @@ import * as tripService from '../services/trip.service';
 import { recordDispatchResponse } from '../services/dispatch.service';
 import { transitionRide } from '../services/tripStateMachine.service';
 import * as cargoService from '../services/cargo.service';
+import { listServiceCatalog } from '../services/service-product.service';
 
 const router = Router();
+
+const quoteTripSchema = z.object({
+  pickupLat: z.number().min(-90).max(90),
+  pickupLng: z.number().min(-180).max(180),
+  dropoffLat: z.number().min(-90).max(90),
+  dropoffLng: z.number().min(-180).max(180),
+  pickupAddress: z.string().max(500).optional(),
+  dropoffAddress: z.string().max(500).optional(),
+  bookingType: z.enum(['ride', 'cargo']).optional(),
+  cityId: z.string().uuid().optional(),
+  cargoWeightKg: z.number().positive().max(50000).optional(),
+});
 
 const createTripSchema = z.object({
   pickupLat: z.number().min(-90).max(90),
@@ -21,6 +34,7 @@ const createTripSchema = z.object({
   dropoffAddress: z.string().max(500).optional(),
   vehicleType: z.string().max(32).optional(),
   currency: z.string().min(3).max(8).optional(),
+  cityId: z.string().uuid().optional(),
   bookingType: z.enum(['ride', 'cargo']).optional(),
   cargoWeightKg: z.number().positive().max(50000).optional(),
   cargoDescription: z.string().max(500).optional(),
@@ -66,6 +80,23 @@ function isAdmin(roles: PlatformRole[] = []) {
 }
 
 router.use(authenticate);
+
+router.get('/catalog', async (_req: AuthRequest, res, next) => {
+  try {
+    sendSuccess(res, await listServiceCatalog());
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.post('/quote', validate(quoteTripSchema), async (req: AuthRequest, res, next) => {
+  try {
+    const data = await tripService.quoteTripForUser(req.user!.sub, req.body);
+    sendSuccess(res, data);
+  } catch (err) {
+    next(err);
+  }
+});
 
 /** POST /trips — create REQUESTED ride + async dispatch */
 router.post('/', validate(createTripSchema), async (req: AuthRequest, res, next) => {

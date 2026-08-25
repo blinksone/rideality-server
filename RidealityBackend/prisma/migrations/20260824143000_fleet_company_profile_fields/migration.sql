@@ -1,0 +1,3 @@
+ALTER TABLE "fleet_companies"
+ADD COLUMN IF NOT EXISTS "email" TEXT,
+ADD COLUMN IF NOT EXISTS "logo_url" TEXT;

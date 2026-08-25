@@ -130,6 +130,34 @@ export async function transitionRide(
   if (options.cancelReason) data.cancelReason = options.cancelReason;
   if (typeof options.fare === 'number') data.fare = options.fare;
 
+  const driverId = options.driverUserId ?? ride.driverUserId;
+  if (driverId) {
+    const profile = await prisma.driverProfile.findUnique({
+      where: { userId: driverId },
+      select: {
+        fleetCompanyId: true,
+        commissionRateOverride: true,
+        fleetCompany: { select: { fleetTakePercent: true } },
+      },
+    });
+    if (!options.fleetCompanyId && !ride.fleetCompanyId && profile?.fleetCompanyId) {
+      data.fleetCompanyId = profile.fleetCompanyId;
+    }
+    const fleetId =
+      options.fleetCompanyId ??
+      (typeof data.fleetCompanyId === 'string' ? data.fleetCompanyId : null) ??
+      ride.fleetCompanyId ??
+      profile?.fleetCompanyId ??
+      null;
+    if (fleetId && next === 'accepted') {
+      const liveTake =
+        profile?.commissionRateOverride != null
+          ? Number(profile.commissionRateOverride)
+          : Number(profile?.fleetCompany?.fleetTakePercent ?? 0);
+      data.fleetTakePercent = liveTake;
+    }
+  }
+
   if (next === 'picked_up' || next === 'driver_en_route') {
     if (!ride.startedAt) data.startedAt = new Date();
   }

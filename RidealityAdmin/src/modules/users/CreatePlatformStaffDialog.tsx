@@ -36,7 +36,7 @@ const STAFF_TYPES: { value: PlatformStaffType; label: string; hint: string }[] =
   { value: 'SUB_ADMIN', label: 'Sub Admin', hint: 'Subset of super-admin permissions' },
   { value: 'FLEET_OWNER', label: 'Fleet Owner', hint: 'Creates a country-level fleet company' },
   { value: 'REGIONAL_FLEET', label: 'Regional Fleet', hint: 'City-level fleet admin for your company' },
-  { value: 'FLEET_FINANCE', label: 'Fleet Finance', hint: 'Finance access for your fleet' },
+  { value: 'FLEET_FINANCE', label: 'Fleet Finance', hint: 'Records driver credits (cash/bank); owner approves' },
   { value: 'FLEET_SUPPORT', label: 'Fleet Support', hint: 'Support staff for your fleet city' },
   { value: 'FINANCE_USER', label: 'Finance User', hint: 'Finance domain routes only' },
   { value: 'PLATFORM_SUPPORT', label: 'Platform Support', hint: 'Platform-wide support and reports' },

@@ -16,6 +16,7 @@ import FleetMetricCard from '@/fleet-portal/components/FleetMetricCard';
 import FleetMetricRow, { FleetMetricCell } from '@/fleet-portal/components/FleetMetricRow';
 import FleetPageHero from '@/fleet-portal/components/FleetPageHero';
 import FleetDriverDetailDialog from '@/fleet-portal/components/FleetDriverDetailDialog';
+import CreditDriverDialog from '@/fleet-portal/components/CreditDriverDialog';
 import { useActiveFleetMembership, useFleetAccessTier } from '@/hooks/useFleetPortalMode';
 import { useNotify } from '@/services/notification';
 import type { FleetDriver } from '@/api/types';
@@ -31,6 +32,9 @@ export default function FleetDriversPage() {
   const [anchor, setAnchor] = useState<{ el: HTMLElement; driver: FleetDriver } | null>(null);
   const [selectedDriverId, setSelectedDriverId] = useState<string | null>(null);
   const [removeTarget, setRemoveTarget] = useState<FleetDriver | null>(null);
+  const [creditTarget, setCreditTarget] = useState<FleetDriver | null>(null);
+  const isFinance = tier === 'finance';
+  const canManageDrivers = tier === 'regional' || tier === 'support';
   const notify = useNotify();
   const queryClient = useQueryClient();
 
@@ -114,12 +118,25 @@ export default function FleetDriversPage() {
       width: 220,
       render: (d) => {
         const canReview =
-          d.onboardingStatus === 'pending_review' || d.onboardingStatus === 'draft';
+          canManageDrivers &&
+          (d.onboardingStatus === 'pending_review' || d.onboardingStatus === 'draft');
         return (
           <Box sx={{ display: 'inline-flex', gap: 1, justifyContent: 'flex-end', alignItems: 'center', flexWrap: 'nowrap' }}>
             <Button size="small" variant="outlined" onClick={() => setSelectedDriverId(d.userId)}>
               View
             </Button>
+            {isFinance && (
+              <Button
+                size="small"
+                variant="contained"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setCreditTarget(d);
+                }}
+              >
+                Credit
+              </Button>
+            )}
             {canReview && (
               <>
                 <Button
@@ -146,9 +163,11 @@ export default function FleetDriversPage() {
                 </Button>
               </>
             )}
-            <IconButton size="small" onClick={(e) => { e.stopPropagation(); setAnchor({ el: e.currentTarget, driver: d }); }}>
-              <MoreVertIcon fontSize="small" />
-            </IconButton>
+            {canManageDrivers && (
+              <IconButton size="small" onClick={(e) => { e.stopPropagation(); setAnchor({ el: e.currentTarget, driver: d }); }}>
+                <MoreVertIcon fontSize="small" />
+              </IconButton>
+            )}
           </Box>
         );
       },
@@ -163,7 +182,11 @@ export default function FleetDriversPage() {
         badge="Driver operations"
         title={regionName ? `Drivers · ${regionName}` : 'Fleet drivers'}
         description={
-          tier === 'regional'
+          tier === 'finance'
+            ? 'Credit a driver for cash or bank payments. The fleet owner must approve before the wallet is updated.'
+            : tier === 'owner'
+              ? 'All drivers in this fleet. Regional fleet handles onboarding; Fleet Finance submits credits for you to approve.'
+            : tier === 'regional'
             ? 'Drivers in your city. Approve onboarding, manage vehicles, and remove drivers if needed.'
             : tier === 'support'
               ? 'Drivers across all cities in this fleet. Document approve/reject stays with regional fleet.'
@@ -184,7 +207,16 @@ export default function FleetDriversPage() {
           <FleetMetricCard label="Online now" value={stats.online} icon={<WifiIcon fontSize="small" />} accent="indigo" />
         </FleetMetricCell>
       </FleetMetricRow>
-      <FleetContentCard title="Driver roster" subtitle="Approve, manage, or remove fleet-assigned drivers">
+      <FleetContentCard
+        title="Driver roster"
+        subtitle={
+          isFinance
+            ? 'Select a driver and submit a credit. The fleet owner approves before the wallet is updated.'
+            : canManageDrivers
+              ? 'Approve, manage, or remove fleet-assigned drivers'
+              : 'Drivers in this fleet company'
+        }
+      >
         <DataTable
           columns={columns}
           rows={data ?? []}
@@ -205,8 +237,21 @@ export default function FleetDriversPage() {
         driverUserId={selectedDriverId}
         onClose={() => setSelectedDriverId(null)}
         actionsPending={statusMutation.isPending}
-        onApprove={(userId) => statusMutation.mutate({ userId, onboardingStatus: 'approved' })}
-        onReject={(userId) => statusMutation.mutate({ userId, onboardingStatus: 'rejected' })}
+        onApprove={
+          canManageDrivers
+            ? (userId) => statusMutation.mutate({ userId, onboardingStatus: 'approved' })
+            : undefined
+        }
+        onReject={
+          canManageDrivers
+            ? (userId) => statusMutation.mutate({ userId, onboardingStatus: 'rejected' })
+            : undefined
+        }
+      />
+      <CreditDriverDialog
+        companyId={companyId}
+        driver={creditTarget}
+        onClose={() => setCreditTarget(null)}
       />
       <Menu anchorEl={anchor?.el} open={Boolean(anchor)} onClose={() => setAnchor(null)}>
         <MenuItem

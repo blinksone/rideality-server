@@ -1,0 +1,5 @@
+ALTER TABLE "fleet_companies"
+  ADD COLUMN IF NOT EXISTS "fleet_take_percent" DECIMAL(5, 2) NOT NULL DEFAULT 0;
+
+ALTER TABLE "rides"
+  ADD COLUMN IF NOT EXISTS "fleet_take_percent" DECIMAL(5, 2) NOT NULL DEFAULT 0;
