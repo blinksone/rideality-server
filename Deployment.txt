@@ -4,6 +4,9 @@ cd RidealityBackend && docker compose up -d && npm ci && npm run dev
 cd RidealityAdmin && npm ci && npm run dev
 
 
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\build-and-push.ps1
+
+
 - On the server:
 
 
