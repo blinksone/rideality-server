@@ -6,7 +6,8 @@
 #   echo YOUR_PAT | docker login ghcr.io -u YOUR_GITHUB_USER --password-stdin
 #
 # Usage (from repo root):
-#   ./scripts/build-and-push.sh
+#   Linux/macOS:  ./scripts/build-and-push.sh
+#   Windows:      .\scripts\build-and-push.ps1
 #
 # Optional env:
 #   IMAGE_TAG       default: short git SHA
