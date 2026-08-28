@@ -1,0 +1,111 @@
+# Production stack: pull pre-built images only (no build:).
+# Joins the existing Postgres/Redis network; does not recreate those containers.
+#
+#   cd /opt/rideality/deploy
+#   docker compose -f docker-compose.prod.yml pull
+#   docker compose -f docker-compose.prod.yml up -d
+#
+# Public ports: gateway :3000, admin :8080. Domain services stay internal.
+
+name: rideality
+
+x-backend-common: &backend-common
+  image: ghcr.io/blinksone/rideality-api:${IMAGE_TAG:-latest}
+  restart: unless-stopped
+  env_file:
+    - .env
+  environment: &backend-env
+    NODE_ENV: production
+    API_PREFIX: /api/v1
+    AUTH_SERVICE_URL: http://auth-service:3001
+    USERS_SERVICE_URL: http://users-service:3002
+    FLEET_SERVICE_URL: http://fleet-service:3003
+    FINANCE_SERVICE_URL: http://finance-service:3004
+    ADMIN_SERVICE_URL: http://admin-service:3005
+    UPLOAD_LOCAL_PATH: /app/uploads
+    LOG_PATH: /app/logs
+    FIREBASE_SERVICE_ACCOUNT_PATH: /app/secrets/rideality-firebase-adminsdk.json
+    GOOGLE_APPLICATION_CREDENTIALS: /app/secrets/rideality-firebase-adminsdk.json
+  volumes:
+    - ${HOST_UPLOADS:-/opt/rideality/uploads}:/app/uploads
+    - ${HOST_LOGS:-/opt/rideality/logs}:/app/logs
+    - ${HOST_SECRETS:-/opt/rideality/secrets}:/app/secrets:ro
+  networks:
+    - backend
+
+services:
+  auth-service:
+    <<: *backend-common
+    container_name: rideality-auth
+    command: ["node", "dist/microservices/server.js"]
+    environment:
+      <<: *backend-env
+      SERVICE_NAME: auth
+      PORT: 3001
+
+  users-service:
+    <<: *backend-common
+    container_name: rideality-users
+    command: ["node", "dist/microservices/server.js"]
+    environment:
+      <<: *backend-env
+      SERVICE_NAME: users
+      PORT: 3002
+
+  fleet-service:
+    <<: *backend-common
+    container_name: rideality-fleet
+    command: ["node", "dist/microservices/server.js"]
+    environment:
+      <<: *backend-env
+      SERVICE_NAME: fleet
+      PORT: 3003
+
+  finance-service:
+    <<: *backend-common
+    container_name: rideality-finance
+    command: ["node", "dist/microservices/server.js"]
+    environment:
+      <<: *backend-env
+      SERVICE_NAME: finance
+      PORT: 3004
+
+  admin-service:
+    <<: *backend-common
+    container_name: rideality-admin-api
+    command: ["node", "dist/microservices/server.js"]
+    environment:
+      <<: *backend-env
+      SERVICE_NAME: admin
+      PORT: 3005
+
+  api-gateway:
+    <<: *backend-common
+    container_name: rideality-gateway
+    command: ["node", "dist/microservices/server.js"]
+    environment:
+      <<: *backend-env
+      SERVICE_NAME: gateway
+      PORT: 3000
+    ports:
+      - "3000:3000"
+    depends_on:
+      - auth-service
+      - users-service
+      - fleet-service
+      - finance-service
+      - admin-service
+
+  admin-web:
+    image: ghcr.io/blinksone/rideality-admin:${IMAGE_TAG:-latest}
+    container_name: rideality-admin-web
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    networks:
+      - backend
+
+networks:
+  backend:
+    name: ridealitybackend_default
+    external: true

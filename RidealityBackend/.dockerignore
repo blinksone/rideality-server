@@ -1,0 +1,14 @@
+node_modules
+dist
+logs
+uploads
+.env
+.env.*
+!.env.example
+.git
+*.log
+coverage
+rideality-admin-portal
+ws-gateway/node_modules
+ws-gateway/dist
+**/*.tsbuildinfo
