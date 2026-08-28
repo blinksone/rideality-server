@@ -5,7 +5,8 @@ RUN npm ci
 COPY . .
 ARG VITE_API_URL=http://65.21.177.122:3000/api/v1
 ENV VITE_API_URL=$VITE_API_URL
-RUN npm run build
+# Production currently serves a Vite dist; tsc -b fails on existing MUI typings.
+RUN npx vite build
 
 FROM nginx:alpine
 COPY nginx.conf /etc/nginx/conf.d/default.conf
