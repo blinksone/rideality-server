@@ -77,6 +77,7 @@ function formatRideListItem(
     fare: Number(ride.fare),
     distanceKm: Number(ride.distanceKm),
     currency: ride.currency,
+    vehicleType: ride.vehicleType,
     driver: ride.driver
       ? {
           id: ride.driver.id,
@@ -86,7 +87,7 @@ function formatRideListItem(
         }
       : null,
     vehicle: ride.vehicle
-      ? { model: ride.vehicle.model, plate: ride.vehicle.numberPlate }
+      ? { model: ride.vehicle.model, plate: ride.vehicle.numberPlate, vehicleType: ride.vehicle.vehicleType }
       : null,
     startedAt: ride.startedAt,
     completedAt: ride.completedAt,
@@ -159,6 +160,7 @@ export async function getPassengerRide(passengerUserId: string, rideId: string) 
       fare: Number(ride.fare),
       distanceKm: Number(ride.distanceKm),
       currency: ride.currency,
+      vehicleType: ride.vehicleType,
       startedAt: ride.startedAt,
       completedAt: ride.completedAt,
       createdAt: ride.createdAt,
