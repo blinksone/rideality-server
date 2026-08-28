@@ -1,0 +1,29 @@
+git clone https://github.com/blinksone/rideality-server.git
+cd rideality-server
+cd RidealityBackend && docker compose up -d && npm ci && npm run dev
+cd RidealityAdmin && npm ci && npm run dev
+
+
+- On the server:
+
+
+cd /opt/rideality/deploy
+docker compose -f docker-compose.prod.yml pull
+docker compose -f docker-compose.prod.yml up -d
+
+
+
+
+Yes. Each service already listens on its **own port inside Docker**:
+
+| Service | Port |
+|---|---|
+| Gateway (public API) | **3000** |
+| Auth | 3001 |
+| Users | 3002 |
+| Fleet | 3003 |
+| Finance | 3004 |
+| Admin API | 3005 |
+| Admin website | **8080** |
+
+Only **3000** and **8080** are open on the server. The others are internal — the gateway talks to them by name (`http://auth-service:3001`, and so on). Clients still use `http://65.21.177.122:3000`.
