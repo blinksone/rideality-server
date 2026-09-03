@@ -25,7 +25,15 @@ export function createGatewayApp() {
   }
 
   // Gateway serves uploads so mobile/admin keep the same host.
-  app.use('/uploads', express.static(path.resolve(env.UPLOAD_LOCAL_PATH)));
+  // Helmet defaults CORP to same-origin, which blocks <img> from the admin SPA origin.
+  app.use(
+    '/uploads',
+    (_req, res, next) => {
+      res.setHeader('Cross-Origin-Resource-Policy', 'cross-origin');
+      next();
+    },
+    express.static(path.resolve(env.UPLOAD_LOCAL_PATH)),
+  );
 
   app.get('/health', (_req, res) => {
     res.json({

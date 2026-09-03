@@ -42,14 +42,45 @@ export function familyForProduct(code: string, bookingType?: 'ride' | 'cargo'): 
   return 'ride';
 }
 
+const DEFAULT_CATALOG: Array<{
+  code: string;
+  label: string;
+  family: ServiceFamily;
+  sortOrder: number;
+  fareMultiplier: number;
+}> = [
+  { code: 'bike', label: 'Bike', family: ServiceFamily.taxi, sortOrder: 10, fareMultiplier: 0.38 },
+  { code: 'rickshaw', label: 'Rickshaw', family: ServiceFamily.taxi, sortOrder: 20, fareMultiplier: 0.67 },
+  { code: 'economy', label: 'Economy', family: ServiceFamily.taxi, sortOrder: 30, fareMultiplier: 1 },
+  { code: 'ac', label: 'AC', family: ServiceFamily.taxi, sortOrder: 40, fareMultiplier: 1.28 },
+  { code: 'cargo', label: 'Cargo', family: ServiceFamily.cargo, sortOrder: 50, fareMultiplier: 1 },
+];
+
+export async function ensureServiceCatalog(): Promise<void> {
+  await prisma.serviceProduct.createMany({
+    data: DEFAULT_CATALOG,
+    skipDuplicates: true,
+  });
+}
+
 export async function listServiceCatalog(family?: 'taxi' | 'cargo'): Promise<ServiceProductDto[]> {
-  const rows = await prisma.serviceProduct.findMany({
+  let rows = await prisma.serviceProduct.findMany({
     where: {
       isActive: true,
       ...(family ? { family: family === 'cargo' ? ServiceFamily.cargo : ServiceFamily.taxi } : {}),
     },
     orderBy: { sortOrder: 'asc' },
   });
+  if (rows.length === 0) {
+    await ensureServiceCatalog();
+    rows = await prisma.serviceProduct.findMany({
+      where: {
+        isActive: true,
+        ...(family ? { family: family === 'cargo' ? ServiceFamily.cargo : ServiceFamily.taxi } : {}),
+      },
+      orderBy: { sortOrder: 'asc' },
+    });
+  }
   return rows.map((row) => ({
     code: row.code,
     label: row.label,
@@ -121,7 +152,9 @@ export async function quoteTrip(input: {
         currency: quoted.currency,
         etaMin,
         available: Boolean(nearest) || enrolled.size === 0 || enrolled.has(product.code),
-        badge: null as string | null,
+        surgeMultiplier: quoted.surgeMultiplier,
+        surgeActive: quoted.surgeMultiplier > 1,
+        badge: quoted.surgeMultiplier > 1 ? 'High demand' : (null as string | null),
       };
     }),
   );
@@ -133,7 +166,7 @@ export async function quoteTrip(input: {
   );
   if (fastest != null) {
     const match = available.find((row) => row.etaMin === fastest);
-    if (match) match.badge = 'Fastest';
+    if (match) match.badge = match.surgeActive ? 'Fastest · High demand' : 'Fastest';
   }
 
   return {

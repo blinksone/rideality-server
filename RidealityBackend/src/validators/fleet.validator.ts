@@ -165,18 +165,26 @@ export const updateTeamMemberSchema = z.object({
 
 export const createFleetStaffSchema = z
   .object({
-    role: z.enum(['REGIONAL', 'SUPPORT', 'regional', 'support']),
+    role: z.enum([
+      'REGIONAL',
+      'SUPPORT',
+      'FINANCE',
+      'regional',
+      'support',
+      'finance',
+      'FLEET_FINANCE',
+      'FLEET_SUPPORT',
+    ]),
     fleetRegionId: z.string().uuid().optional(),
     fullName: z.string().trim().min(2).max(120),
     email: z.string().email().max(254),
     phone: z.string().min(8).max(20),
   })
   .superRefine((data, ctx) => {
-    const isRegional = data.role === 'REGIONAL' || data.role === 'regional';
-    if (isRegional && !data.fleetRegionId) {
+    if (!data.fleetRegionId) {
       ctx.addIssue({
         code: 'custom',
-        message: 'City is required for regional fleet',
+        message: 'City is required',
         path: ['fleetRegionId'],
       });
     }

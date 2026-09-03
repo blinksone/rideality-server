@@ -686,10 +686,25 @@ export async function getFleetMapData(companyId: string): Promise<FleetMapData> 
   return data.data;
 }
 
+export async function adminListFleetRegions(companyId: string): Promise<FleetRegionRow[]> {
+  const { data } = await apiClient.get<ApiSuccess<FleetRegionRow[]>>(`/admin/fleets/${companyId}/regions`);
+  return data.data;
+}
+
 export async function listManagedFleetRegions(companyId: string): Promise<FleetRegionRow[]> {
   const { data } = await apiClient.get<ApiSuccess<FleetRegionRow[]>>(
     `/fleet/companies/${companyId}/managed-regions`,
   );
+  return data.data;
+}
+
+export async function listFleetCityServices(
+  companyId: string,
+  regionId: string,
+): Promise<Array<{ code: string; label: string; family: 'taxi' | 'cargo'; enabled: boolean }>> {
+  const { data } = await apiClient.get<
+    ApiSuccess<Array<{ code: string; label: string; family: 'taxi' | 'cargo'; enabled: boolean }>>
+  >(`/fleet/companies/${companyId}/regions/${regionId}/services`);
   return data.data;
 }
 
@@ -818,6 +833,30 @@ export async function getFleetCityProfile(
   return data.data;
 }
 
+export type FleetCityService = NonNullable<FleetCityProfile['services']>[number];
+
+export async function adminListFleetCityServices(
+  companyId: string,
+  regionId: string,
+): Promise<FleetCityService[]> {
+  const { data } = await apiClient.get<ApiSuccess<FleetCityService[]>>(
+    `/admin/fleets/${companyId}/regions/${regionId}/services`,
+  );
+  return data.data;
+}
+
+export async function adminUpdateFleetCityServices(
+  companyId: string,
+  regionId: string,
+  products: Array<{ code: string; enabled: boolean }>,
+): Promise<FleetCityService[]> {
+  const { data } = await apiClient.put<ApiSuccess<FleetCityService[]>>(
+    `/admin/fleets/${companyId}/regions/${regionId}/services`,
+    { products },
+  );
+  return data.data;
+}
+
 export async function updateFleetCityServices(
   companyId: string,
   regionId: string,
@@ -900,7 +939,7 @@ export async function rejectFleetDocument(documentId: string, rejectionReason: s
 export async function createFleetStaffUser(
   companyId: string,
   payload: {
-    role: 'REGIONAL' | 'SUPPORT' | 'regional' | 'support';
+    role: 'REGIONAL' | 'SUPPORT' | 'FINANCE' | 'regional' | 'support' | 'finance';
     fleetRegionId?: string;
     fullName: string;
     email: string;

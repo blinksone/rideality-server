@@ -425,6 +425,19 @@ router.get('/companies/:id/regions/:regionId', async (req: AuthRequest, res, nex
   }
 });
 
+router.get('/companies/:id/regions/:regionId/services', async (req: AuthRequest, res, next) => {
+  try {
+    const data = await fleetHierarchy.getFleetCityServicesForAdmin(
+      param(req.params.id),
+      req.user!.sub,
+      param(req.params.regionId),
+    );
+    sendSuccess(res, data);
+  } catch (err) {
+    next(err);
+  }
+});
+
 router.put(
   '/companies/:id/regions/:regionId/services',
   validate(

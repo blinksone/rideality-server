@@ -22,6 +22,7 @@ export type FleetAccessContext = {
   canReviewDriverCredit: boolean;
   canInviteRegional: boolean;
   canInviteSupport: boolean;
+  canInviteFinance: boolean;
 };
 
 const STAFF_ROLES: FleetMemberRole[] = [
@@ -309,7 +310,8 @@ export async function assertFleetAccess(
     canRequestDriverCredit,
     canReviewDriverCredit,
     canInviteRegional: isPlatformAdmin || tier === 'owner',
-    canInviteSupport: isPlatformAdmin || tier === 'regional',
+    canInviteSupport: isPlatformAdmin || tier === 'regional' || tier === 'owner',
+    canInviteFinance: isPlatformAdmin || tier === 'owner',
   };
 }
 

@@ -485,6 +485,7 @@ export interface FareConfig {
   bookingFee: number;
   cancellationFee: number;
   cargoPerKg: number;
+  surgeMultiplier: number;
   isCountryDefault: boolean;
   countryName: string | null;
   countryCode: string | null;
@@ -507,6 +508,7 @@ export interface FareConfigPayload {
   bookingFee: number;
   cancellationFee?: number;
   cargoPerKg?: number;
+  surgeMultiplier?: number;
 }
 
 export interface AdminPlace {

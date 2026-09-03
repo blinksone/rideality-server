@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
+  Alert,
   Box,
   Button,
   Chip,
@@ -41,6 +42,7 @@ const emptyForm = {
   bookingFee: '20',
   cancellationFee: '50',
   cargoPerKg: '8',
+  surgeMultiplier: '1',
 };
 
 function num(value: string): number {
@@ -81,6 +83,12 @@ export default function FareConfigsPage() {
     queryKey: ['service-products'],
     queryFn: listServiceProducts,
   });
+
+  useEffect(() => {
+    if (!products.length) return;
+    setForm((f) => (products.some((p) => p.code === f.product) ? f : { ...f, product: products[0].code }));
+    setProductFilter((current) => (current && !products.some((p) => p.code === current) ? '' : current));
+  }, [products]);
   const { data: rows = [], isLoading } = useQuery({
     queryKey: ['fare-configs', countryFilter, cityFilter, productFilter],
     queryFn: () =>
@@ -93,13 +101,37 @@ export default function FareConfigsPage() {
 
   const selectedCountry = countries.find((c) => c.id === (editing ? editing.countryId : form.countryId));
 
+  const formCityId = cityLocked ? scopeCityId ?? '' : form.countryDefault ? '' : form.cityId;
+  const existingInScope = rows.filter((r) => {
+    if (editing && r.id === editing.id) return false;
+    if (r.countryId !== form.countryId) return false;
+    if (!formCityId) return r.isCountryDefault;
+    return r.cityId === formCityId;
+  });
+  const takenProductCodes = new Set(
+    existingInScope.map((r) => r.serviceProductCode ?? (r.product === 'cargo' ? 'cargo' : 'economy')),
+  );
+  const duplicateRow = !editing
+    ? existingInScope.find(
+        (r) => (r.serviceProductCode ?? (r.product === 'cargo' ? 'cargo' : 'economy')) === form.product,
+      )
+    : undefined;
+
   const openCreate = () => {
+    const countryId = scopeCountryId ?? countries[0]?.id ?? '';
+    const cityId = scopeCityId ?? '';
+    const taken = new Set(
+      rows
+        .filter((r) => r.countryId === countryId && (cityId ? r.cityId === cityId : r.isCountryDefault))
+        .map((r) => r.serviceProductCode ?? (r.product === 'cargo' ? 'cargo' : 'economy')),
+    );
     setEditing(null);
     setForm({
       ...emptyForm,
-      countryId: scopeCountryId ?? countries[0]?.id ?? '',
-      cityId: scopeCityId ?? '',
+      countryId,
+      cityId,
       countryDefault: false,
+      product: products.find((p) => !taken.has(p.code))?.code ?? products[0]?.code ?? emptyForm.product,
     });
     setDialogOpen(true);
   };
@@ -118,6 +150,7 @@ export default function FareConfigsPage() {
       bookingFee: String(row.bookingFee),
       cancellationFee: String(row.cancellationFee),
       cargoPerKg: String(row.cargoPerKg),
+      surgeMultiplier: String(row.surgeMultiplier ?? 1),
     });
     setDialogOpen(true);
   };
@@ -132,6 +165,7 @@ export default function FareConfigsPage() {
         bookingFee: num(form.bookingFee),
         cancellationFee: num(form.cancellationFee),
         cargoPerKg: form.product === 'cargo' ? num(form.cargoPerKg) : 0,
+        surgeMultiplier: num(form.surgeMultiplier) || 1,
       };
       if (editing) return updateFareConfig(editing.id, rates);
       return createFareConfig({
@@ -180,6 +214,17 @@ export default function FareConfigsPage() {
       { id: 'minimumFare', label: 'Minimum', align: 'right', render: (r) => r.minimumFare.toFixed(2) },
       { id: 'bookingFee', label: 'Booking fee', align: 'right', render: (r) => r.bookingFee.toFixed(2) },
       {
+        id: 'surge',
+        label: 'Surge',
+        align: 'right',
+        render: (r) =>
+          (r.surgeMultiplier ?? 1) > 1 ? (
+            <Chip size="small" color="warning" label={`${Number(r.surgeMultiplier).toFixed(2)}×`} />
+          ) : (
+            '1.00×'
+          ),
+      },
+      {
         id: 'actions',
         label: 'Actions',
         align: 'right',
@@ -208,7 +253,7 @@ export default function FareConfigsPage() {
       <PageHeader
         title="Fare config"
         badge="Pricing"
-        subtitle="City tariffs per taxi class (Bike, Economy, AC) and cargo. Country default applies when a city has no tariff of its own."
+        subtitle="City tariffs per taxi class (Bike, Economy, AC) and cargo. Surge multiplies the tariff (not the booking fee). Country default applies when a city has no tariff of its own."
         actions={
           <Button variant="contained" startIcon={<AddIcon />} onClick={openCreate}>
             Add fare
@@ -283,6 +328,20 @@ export default function FareConfigsPage() {
       <Dialog open={dialogOpen} onClose={() => setDialogOpen(false)} maxWidth="sm" fullWidth>
         <DialogTitle>{editing ? 'Edit fare config' : 'Add fare config'}</DialogTitle>
         <DialogContent sx={{ display: 'flex', flexDirection: 'column', gap: 2, pt: 2 }}>
+          {!editing && duplicateRow && (
+            <Alert
+              severity="warning"
+              action={
+                <Button color="inherit" size="small" onClick={() => openEdit(duplicateRow)}>
+                  Edit existing
+                </Button>
+              }
+            >
+              A {duplicateRow.productLabel ?? form.product} tariff already exists for{' '}
+              {duplicateRow.isCountryDefault ? 'the country default' : duplicateRow.cityName}. Each city (or country
+              default) can have only one fare per product.
+            </Alert>
+          )}
           <FormControl fullWidth disabled={Boolean(editing) || cityLocked || Boolean(scopeCountryId && role === 'COUNTRY_ADMIN')}>
             <InputLabel>Country</InputLabel>
             <Select
@@ -313,7 +372,20 @@ export default function FareConfigsPage() {
             <Select
               label="City"
               value={form.cityId}
-              onChange={(e) => setForm((f) => ({ ...f, cityId: e.target.value }))}
+              onChange={(e) => {
+                const cityId = e.target.value;
+                setForm((f) => {
+                  const taken = new Set(
+                    rows
+                      .filter((r) => r.countryId === f.countryId && r.cityId === cityId)
+                      .map((r) => r.serviceProductCode ?? (r.product === 'cargo' ? 'cargo' : 'economy')),
+                  );
+                  const product = taken.has(f.product)
+                    ? products.find((p) => !taken.has(p.code))?.code ?? f.product
+                    : f.product;
+                  return { ...f, cityId, product };
+                });
+              }}
             >
               {cities.map((c) => (
                 <MenuItem key={c.id} value={c.id}>
@@ -326,14 +398,23 @@ export default function FareConfigsPage() {
             <InputLabel>Product</InputLabel>
             <Select
               label="Product"
-              value={form.product}
+              value={products.some((p) => p.code === form.product) ? form.product : ''}
               onChange={(e) => setForm((f) => ({ ...f, product: e.target.value }))}
+              displayEmpty
             >
-              {products.map((p) => (
-                <MenuItem key={p.code} value={p.code}>
-                  {p.label}
+              {products.length === 0 && (
+                <MenuItem value="" disabled>
+                  No products available
                 </MenuItem>
-              ))}
+              )}
+              {products.map((p) => {
+                const taken = takenProductCodes.has(p.code);
+                return (
+                  <MenuItem key={p.code} value={p.code} disabled={taken}>
+                    {taken ? `${p.label} (already configured)` : p.label}
+                  </MenuItem>
+                );
+              })}
             </Select>
           </FormControl>
           <Typography variant="caption" color="text.secondary">
@@ -344,6 +425,14 @@ export default function FareConfigsPage() {
           <TextField label="Per minute" type="number" value={form.perMinute} onChange={(e) => setForm((f) => ({ ...f, perMinute: e.target.value }))} />
           <TextField label="Minimum fare" type="number" value={form.minimumFare} onChange={(e) => setForm((f) => ({ ...f, minimumFare: e.target.value }))} />
           <TextField label="Booking fee" type="number" value={form.bookingFee} onChange={(e) => setForm((f) => ({ ...f, bookingFee: e.target.value }))} />
+          <TextField
+            label="Surge multiplier"
+            type="number"
+            inputProps={{ min: 0.5, max: 5, step: 0.1 }}
+            value={form.surgeMultiplier}
+            onChange={(e) => setForm((f) => ({ ...f, surgeMultiplier: e.target.value }))}
+            helperText="1 = normal. 1.5 = 50% high demand (Yango-style). Booking fee is not surged. Range 0.5–5."
+          />
           <TextField label="Cancellation fee" type="number" value={form.cancellationFee} onChange={(e) => setForm((f) => ({ ...f, cancellationFee: e.target.value }))} />
           {form.product === 'cargo' && (
             <TextField label="Cargo per kg" type="number" value={form.cargoPerKg} onChange={(e) => setForm((f) => ({ ...f, cargoPerKg: e.target.value }))} />
@@ -353,7 +442,12 @@ export default function FareConfigsPage() {
           <Button onClick={() => setDialogOpen(false)}>Cancel</Button>
           <Button
             variant="contained"
-            disabled={saveMutation.isPending || !form.countryId || (!form.countryDefault && !cityLocked && !form.cityId && !editing)}
+            disabled={
+              saveMutation.isPending ||
+              Boolean(duplicateRow) ||
+              !form.countryId ||
+              (!form.countryDefault && !cityLocked && !form.cityId && !editing)
+            }
             onClick={() => saveMutation.mutate()}
           >
             Save

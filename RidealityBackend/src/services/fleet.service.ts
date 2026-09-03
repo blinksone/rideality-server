@@ -24,7 +24,7 @@ import {
   normalizeMemberRole,
   notStaffDriverUserFilter,
 } from './fleet-access';
-import { upsertAdminAssignment, scopedFleetCompanyWhere, type AdminAssignmentRecord } from './admin-scope.service';
+import { upsertAdminAssignment, scopedFleetCompanyWhere, getAdminAssignment, isSuperAdminRole, type AdminAssignmentRecord } from './admin-scope.service';
 import { saveLocalUpload } from './user.service';
 import { isValidE164, normalizePhone } from '../utils/phone';
 
@@ -155,6 +155,13 @@ export async function listFleetCompanies(
     requester?.roles.includes(PlatformRole.SUPER_ADMIN) ||
     requester?.roles.includes(PlatformRole.ADMIN) ||
     requester?.roles.includes(PlatformRole.SUB_ADMIN);
+  const geoRole = requester?.assignment?.role;
+  const isGeoAdmin =
+    geoRole === 'GLOBAL_ADMIN' ||
+    geoRole === 'CONTINENT_ADMIN' ||
+    geoRole === 'COUNTRY_ADMIN' ||
+    geoRole === 'REGIONAL_ADMIN' ||
+    geoRole === 'CITY_ADMIN';
 
   const where: Prisma.FleetCompanyWhereInput = {
     ...scopedFleetCompanyWhere(requester?.assignment ?? null),
@@ -169,7 +176,7 @@ export async function listFleetCompanies(
   if (query.regionId && !where.regionId) {
     where.regionId = query.regionId;
   }
-  if (requester && !isPlatformAdmin) {
+  if (requester && !isPlatformAdmin && !isGeoAdmin) {
     where.OR = [
       { ownerUserId: requester.userId },
       { memberships: { some: { userId: requester.userId, status: FleetMemberStatus.active } } },
@@ -304,6 +311,16 @@ export async function adminUpdateFleetCompany(
 ) {
   const existing = await prisma.fleetCompany.findUnique({ where: { id: companyId } });
   if (!existing) throw new NotFoundError('Fleet company not found');
+
+  const assignment = await getAdminAssignment(adminUserId);
+  if (assignment && !isSuperAdminRole(assignment.role)) {
+    const inScope = await prisma.fleetCompany.findFirst({
+      where: { id: companyId, AND: [scopedFleetCompanyWhere(assignment)] },
+    });
+    if (!inScope) {
+      throw new ForbiddenError('Fleet is outside your assigned scope');
+    }
+  }
 
   if (data.ownerUserId !== undefined) {
     const perms = await resolveUserPermissionKeys(adminUserId);

@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useParams, useNavigate } from 'react-router-dom';
 import {
@@ -8,7 +8,14 @@ import {
   DialogActions,
   DialogContent,
   DialogTitle,
+  FormControl,
+  FormControlLabel,
+  InputLabel,
+  MenuItem,
+  Select,
+  Switch,
   TextField,
+  Typography,
 } from '@mui/material';
 import AddIcon from '@mui/icons-material/Add';
 import PersonAddIcon from '@mui/icons-material/PersonAdd';
@@ -18,8 +25,10 @@ import SupportAgentIcon from '@mui/icons-material/SupportAgent';
 import {
   createFleetRegion,
   getFleetCompany,
+  listFleetCityServices,
   listFleetTeam,
   listManagedFleetRegions,
+  updateFleetCityServices,
   type FleetRegionRow,
 } from '@/api/fleet.api';
 import { getApiErrorMessage } from '@/api/client';
@@ -45,6 +54,7 @@ export default function FleetRegionsPage() {
   const [createOpen, setCreateOpen] = useState(false);
   const [cityName, setCityName] = useState('');
   const [staffCity, setStaffCity] = useState<FleetRegionRow | null>(null);
+  const [serviceCityId, setServiceCityId] = useState('');
 
   const { data: company } = useQuery({
     queryKey: ['fleet-company', companyId],
@@ -64,6 +74,28 @@ export default function FleetRegionsPage() {
     queryKey: ['fleet-managed-regions', companyId],
     queryFn: () => listManagedFleetRegions(companyId),
     enabled: Boolean(companyId),
+  });
+
+  const activeServiceCityId = useMemo(() => {
+    if (regions.some((r) => r.id === serviceCityId)) return serviceCityId;
+    return regions[0]?.id ?? '';
+  }, [regions, serviceCityId]);
+
+  const { data: cityServices = [], isLoading: servicesLoading } = useQuery({
+    queryKey: ['fleet-city-services', companyId, activeServiceCityId],
+    queryFn: () => listFleetCityServices(companyId, activeServiceCityId),
+    enabled: Boolean(companyId && activeServiceCityId && canManage),
+  });
+
+  const servicesMutation = useMutation({
+    mutationFn: (products: Array<{ code: string; enabled: boolean }>) =>
+      updateFleetCityServices(companyId, activeServiceCityId, products),
+    onSuccess: () => {
+      notify.success('City services updated');
+      queryClient.invalidateQueries({ queryKey: ['fleet-city-services', companyId, activeServiceCityId] });
+      queryClient.invalidateQueries({ queryKey: ['fleet-city-profile', companyId, activeServiceCityId] });
+    },
+    onError: (e) => notify.error(getApiErrorMessage(e)),
   });
 
   const createMutation = useMutation({
@@ -124,7 +156,7 @@ export default function FleetRegionsPage() {
       <FleetPageHero
         badge="Coverage"
         title="Cities"
-        description="Each city is a regional fleet. Open a city to see its drivers, vehicles, trips, wallets, and complaints."
+        description="Each city is a regional fleet. Enable taxi and cargo products below, or open a city for drivers and tickets."
         actions={
           canManage ? (
             <Button variant="contained" startIcon={<AddIcon />} onClick={() => setCreateOpen(true)}>
@@ -169,6 +201,76 @@ export default function FleetRegionsPage() {
           paperSx={{ border: 0, boxShadow: 'none' }}
         />
       </FleetContentCard>
+
+      {canManage && (
+        <FleetContentCard
+          title="Services in this city"
+          subtitle="What this fleet offers here. Riders only see enabled products with the city fare."
+        >
+          {regions.length > 1 && (
+            <FormControl size="small" sx={{ minWidth: 220, mb: 2 }}>
+              <InputLabel id="owner-service-city-label">City</InputLabel>
+              <Select
+                labelId="owner-service-city-label"
+                label="City"
+                value={activeServiceCityId}
+                onChange={(e) => setServiceCityId(e.target.value)}
+              >
+                {regions.map((c) => (
+                  <MenuItem key={c.id} value={c.id}>
+                    {c.name}
+                  </MenuItem>
+                ))}
+              </Select>
+            </FormControl>
+          )}
+          {servicesLoading ? (
+            <Typography color="text.secondary">Loading services…</Typography>
+          ) : !activeServiceCityId || cityServices.length === 0 ? (
+            <Typography color="text.secondary">
+              {regions.length === 0
+                ? 'Add a city first, then enable Bike, Economy, AC, and cargo.'
+                : 'No catalog products yet for this city.'}
+            </Typography>
+          ) : (
+            <Box>
+              {(['taxi', 'cargo'] as const).map((family) => {
+                const rows = cityServices.filter((s) => s.family === family);
+                if (!rows.length) return null;
+                return (
+                  <Box key={family} sx={{ mb: 1.5 }}>
+                    <Typography variant="subtitle2" sx={{ mb: 0.5 }}>
+                      {family === 'taxi' ? 'Taxi' : 'Cargo'}
+                    </Typography>
+                    {rows.map((row) => (
+                      <FormControlLabel
+                        key={row.code}
+                        sx={{ display: 'flex', ml: 0 }}
+                        control={
+                          <Switch
+                            checked={row.enabled}
+                            disabled={servicesMutation.isPending}
+                            onChange={(_, enabled) =>
+                              servicesMutation.mutate(
+                                cityServices.map((item) =>
+                                  item.code === row.code
+                                    ? { code: item.code, enabled }
+                                    : { code: item.code, enabled: item.enabled },
+                                ),
+                              )
+                            }
+                          />
+                        }
+                        label={`${row.label} (${row.code})`}
+                      />
+                    ))}
+                  </Box>
+                );
+              })}
+            </Box>
+          )}
+        </FleetContentCard>
+      )}
 
       <Dialog open={createOpen} onClose={() => setCreateOpen(false)} maxWidth="xs" fullWidth>
         <DialogTitle>Add city</DialogTitle>

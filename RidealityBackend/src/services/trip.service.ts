@@ -49,6 +49,7 @@ export function formatTrip(
     dropoffAddress: string;
     fare: Prisma.Decimal | number;
     fareEstimate: Prisma.Decimal | number | null;
+    surgeMultiplier?: Prisma.Decimal | number | null;
     distanceKm: Prisma.Decimal | number;
     currency: string;
     vehicleType: string | null;
@@ -99,6 +100,7 @@ export function formatTrip(
     },
     fare: Number(ride.fare),
     fareEstimate: ride.fareEstimate != null ? Number(ride.fareEstimate) : null,
+    surgeMultiplier: ride.surgeMultiplier != null ? Number(ride.surgeMultiplier) : 1,
     distanceKm: Number(ride.distanceKm),
     currency: ride.currency,
     vehicleType: ride.vehicleType,
@@ -269,6 +271,7 @@ export async function createTrip(passengerUserId: string, input: CreateTripInput
       fareEstimate,
       bookingFee: quoted.bookingFee,
       platformCommissionPercent: quoted.platformCommissionPercent,
+      surgeMultiplier: quoted.surgeMultiplier,
       distanceKm: Math.round((distanceM / 1000) * 100) / 100,
       currency: input.currency ?? quoted.currency ?? passenger.region.currency,
       vehicleType: normalizeVehicleType(input.vehicleType) ?? input.vehicleType ?? 'economy',

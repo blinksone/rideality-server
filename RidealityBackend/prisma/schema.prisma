@@ -385,6 +385,8 @@ model FareConfig {
   bookingFee      Decimal     @map("booking_fee") @db.Decimal(12, 2)
   cancellationFee Decimal     @default(0) @map("cancellation_fee") @db.Decimal(12, 2)
   cargoPerKg      Decimal     @default(0) @map("cargo_per_kg") @db.Decimal(12, 4)
+  /// Yango-style demand multiplier. 1 = normal; 1.5 = +50%. Applied to the tariff, not the booking fee.
+  surgeMultiplier Decimal     @default(1) @map("surge_multiplier") @db.Decimal(4, 2)
   createdAt       DateTime    @default(now()) @map("created_at")
   updatedAt       DateTime    @updatedAt @map("updated_at")
 
@@ -392,6 +394,8 @@ model FareConfig {
   city           City?           @relation(fields: [cityId], references: [id], onDelete: Cascade)
   serviceProduct ServiceProduct? @relation(fields: [serviceProductCode], references: [code])
 
+  /// One city tariff per product. Country defaults (cityId null) use a partial unique index in SQL.
+  @@unique([cityId, serviceProductCode], map: "fare_configs_city_product_uidx")
   @@index([countryId, product])
   @@index([cityId, product])
   @@index([serviceProductCode])
@@ -914,6 +918,8 @@ model Ride {
   bookingFee      Decimal     @default(0) @map("booking_fee") @db.Decimal(12, 2)
   /// Snapshot of Region.platformCommissionPercent at quote time (0–100).
   platformCommissionPercent Decimal @default(0) @map("platform_commission_percent") @db.Decimal(5, 2)
+  /// Snapshot of fare surge at quote time (1 = no surge).
+  surgeMultiplier Decimal @default(1) @map("surge_multiplier") @db.Decimal(4, 2)
   /// Snapshot of fleet take % of operator share at accept time (0–100).
   fleetTakePercent Decimal    @default(0) @map("fleet_take_percent") @db.Decimal(5, 2)
   distanceKm      Decimal     @default(0) @map("distance_km") @db.Decimal(10, 2)

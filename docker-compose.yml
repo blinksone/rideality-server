@@ -1,0 +1,180 @@
+# Local pre-production stack: build the same Dockerfiles used in production.
+# From repo root:
+#   docker compose up --build
+#
+# API gateway:  http://localhost:3000/health
+# Admin website: http://localhost:8080
+# Login: admin@rideality.com / Admin@123456
+# Dev OTP bypass: 123456
+
+name: rideality-local
+
+x-backend-common: &backend-common
+  build:
+    context: ./RidealityBackend
+    dockerfile: Dockerfile
+  restart: unless-stopped
+  env_file:
+    - ./RidealityBackend/.env
+  environment: &backend-env
+    NODE_ENV: development
+    API_PREFIX: /api/v1
+    DATABASE_URL: postgresql://rideality:rideality_secret@postgres:5432/rideality?schema=public
+    REDIS_URL: redis://redis:6379
+    AUTH_SERVICE_URL: http://auth-service:3001
+    USERS_SERVICE_URL: http://users-service:3002
+    FLEET_SERVICE_URL: http://fleet-service:3003
+    FINANCE_SERVICE_URL: http://finance-service:3004
+    ADMIN_SERVICE_URL: http://admin-service:3005
+    UPLOAD_LOCAL_PATH: /app/uploads
+    LOG_PATH: /app/logs
+    OTP_ALLOW_BYPASS: "true"
+  volumes:
+    - ./RidealityBackend/uploads:/app/uploads
+    - ./RidealityBackend/logs:/app/logs
+  depends_on:
+    postgres:
+      condition: service_healthy
+    redis:
+      condition: service_healthy
+    db-init:
+      condition: service_completed_successfully
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: rideality-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: rideality
+      POSTGRES_PASSWORD: rideality_secret
+      POSTGRES_DB: rideality
+    volumes:
+      - rideality_pg_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U rideality -d rideality"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+
+  redis:
+    image: redis:7-alpine
+    container_name: rideality-redis
+    restart: unless-stopped
+    volumes:
+      - rideality_redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+
+  db-init:
+    build:
+      context: ./RidealityBackend
+      dockerfile: Dockerfile
+    container_name: rideality-db-init
+    restart: "no"
+    env_file:
+      - ./RidealityBackend/.env
+    environment:
+      DATABASE_URL: postgresql://rideality:rideality_secret@postgres:5432/rideality?schema=public
+    depends_on:
+      postgres:
+        condition: service_healthy
+    command:
+      [
+        "sh",
+        "-c",
+        "npx prisma db execute --schema prisma/schema.prisma --file prisma/sql/dedupe_fare_configs.sql && npx prisma db push --skip-generate && npx prisma db execute --schema prisma/schema.prisma --file prisma/sql/fare_config_unique.sql && npx tsx prisma/seed.ts",
+      ]
+
+  auth-service:
+    <<: *backend-common
+    container_name: rideality-auth
+    command: ["node", "dist/microservices/server.js"]
+    environment:
+      <<: *backend-env
+      SERVICE_NAME: auth
+      PORT: 3001
+
+  users-service:
+    <<: *backend-common
+    container_name: rideality-users
+    command: ["node", "dist/microservices/server.js"]
+    environment:
+      <<: *backend-env
+      SERVICE_NAME: users
+      PORT: 3002
+
+  fleet-service:
+    <<: *backend-common
+    container_name: rideality-fleet
+    command: ["node", "dist/microservices/server.js"]
+    environment:
+      <<: *backend-env
+      SERVICE_NAME: fleet
+      PORT: 3003
+
+  finance-service:
+    <<: *backend-common
+    container_name: rideality-finance
+    command: ["node", "dist/microservices/server.js"]
+    environment:
+      <<: *backend-env
+      SERVICE_NAME: finance
+      PORT: 3004
+
+  admin-service:
+    <<: *backend-common
+    container_name: rideality-admin-api
+    command: ["node", "dist/microservices/server.js"]
+    environment:
+      <<: *backend-env
+      SERVICE_NAME: admin
+      PORT: 3005
+
+  api-gateway:
+    <<: *backend-common
+    container_name: rideality-gateway
+    command: ["node", "dist/microservices/server.js"]
+    environment:
+      <<: *backend-env
+      SERVICE_NAME: gateway
+      PORT: 3000
+    ports:
+      - "3000:3000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      db-init:
+        condition: service_completed_successfully
+      auth-service:
+        condition: service_started
+      users-service:
+        condition: service_started
+      fleet-service:
+        condition: service_started
+      finance-service:
+        condition: service_started
+      admin-service:
+        condition: service_started
+
+  admin-web:
+    build:
+      context: ./RidealityAdmin
+      dockerfile: Dockerfile
+      args:
+        VITE_API_URL: http://localhost:3000/api/v1
+    container_name: rideality-admin-web
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    depends_on:
+      - api-gateway
+
+volumes:
+  rideality_pg_data:
+  rideality_redis_data:

@@ -16,7 +16,9 @@ import adminRegionRoutes from '../routes/admin.region.routes';
 import adminFleetRoutes from '../routes/admin.fleet.routes';
 import adminFinanceRoutes from '../routes/admin.finance.routes';
 import adminFareRoutes from '../routes/admin.fare.routes';
+import adminPlacesRoutes from '../routes/admin.places.routes';
 import fleetRoutes from '../routes/fleet.routes';
+import placesRoutes from '../routes/places.routes';
 import internalFinanceRoutes from '../routes/internal.finance.routes';
 import tripRoutes from '../routes/trip.routes';
 import type { ServiceId } from './registry';
@@ -30,7 +32,14 @@ function applyCommonMiddleware(app: express.Application) {
   }
   app.use(express.json({ limit: '1mb' }));
   app.use(express.urlencoded({ extended: true }));
-  app.use('/uploads', express.static(path.resolve(env.UPLOAD_LOCAL_PATH)));
+  app.use(
+    '/uploads',
+    (_req, res, next) => {
+      res.setHeader('Cross-Origin-Resource-Policy', 'cross-origin');
+      next();
+    },
+    express.static(path.resolve(env.UPLOAD_LOCAL_PATH)),
+  );
 }
 
 function mountAuth(api: Router) {
@@ -41,6 +50,7 @@ function mountUsers(api: Router) {
   api.use('/onboarding', onboardingRoutes);
   api.use('/users', userRoutes);
   api.use('/trips', tripRoutes);
+  api.use('/places', placesRoutes);
 }
 
 function mountFleet(api: Router) {
@@ -57,9 +67,10 @@ function mountAdmin(api: Router) {
   api.use('/admin/users', adminRoutes);
   api.use('/admin/permissions', adminPermissionRoutes);
   api.use('/admin/roles', roleRouter);
-  api.use('/admin', adminPortalRoutes);
   api.use('/admin/regions', adminRegionRoutes);
   api.use('/admin/fares', adminFareRoutes);
+  api.use('/admin/places', adminPlacesRoutes);
+  api.use('/admin', adminPortalRoutes);
 }
 
 const mountByService: Record<Exclude<ServiceId, 'gateway'>, (api: Router) => void> = {

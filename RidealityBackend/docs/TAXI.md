@@ -101,6 +101,8 @@ Delivery:
       "currency": "PKR",
       "etaMin": 3,
       "available": true,
+      "surgeMultiplier": 1,
+      "surgeActive": false,
       "badge": null
     },
     {
@@ -133,11 +135,13 @@ Delivery:
 | `options[].label` | Row title |
 | `options[].fare` + `currency` | `Rs 480` |
 | `options[].etaMin` | `6 min` |
-| `options[].badge` | “Fastest” chip; hide if null |
+| `options[].badge` | “Fastest” / “High demand”; hide if null |
 | `options[].available` | Dim / disable if false |
 | `options[].vehicleType` | Keep; send on `POST /trips` |
+| `options[].surgeMultiplier` | `1` normal, `1.5` = +50%. Already baked into `fare`. |
+| `options[].surgeActive` | Show a demand chip when true |
 
-Default-select `badge == "Fastest"`, else first `available` row.  
+Default-select `badge` containing `Fastest`, else first `available` row.  
 Button: `Request {label}`.
 
 Re-call quote when pickup, dropoff, or tab changes.
@@ -193,7 +197,7 @@ Payment method only. Not the fare.
 
 | Who | Where | What |
 |---|---|---|
-| Country / city admin | Admin → Fare config | Rider price per product (Bike, Economy, AC, Cargo) |
+| Country / city admin | Admin → Fare config | Rider price per product, plus **surge** (1 = normal, 1.5 = high demand) |
 | Fleet owner | Portal → Cities → city → **Services in this city** | Which products that fleet runs |
 | Vehicle | Portal → Vehicles | `economy`, `ac`, `bike`, `rickshaw`, `cargo` |
 

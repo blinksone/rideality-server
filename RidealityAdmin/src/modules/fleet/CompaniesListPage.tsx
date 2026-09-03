@@ -17,6 +17,7 @@ import DataTable, { type DataTableColumn } from '@/components/DataTable';
 import PageHeader from '@/components/PageHeader';
 import { useDebounce } from '@/hooks/useDebounce';
 import { usePermissions } from '@/hooks/usePermissions';
+import { useAdminScope } from '@/hooks/useAdminScope';
 import type { FleetCompany, FleetCompanyStatus } from '@/api/types';
 import { formatDate, formatLabel } from '@/utils/format';
 
@@ -30,6 +31,8 @@ function statusColor(status: string): 'default' | 'success' | 'warning' | 'error
 export default function CompaniesListPage() {
   const navigate = useNavigate();
   const { can } = usePermissions();
+  const { role } = useAdminScope();
+  const canCreateCompany = can('FLEET_CREATE') && role !== 'CITY_ADMIN';
   const [page, setPage] = useState(0);
   const [rowsPerPage, setRowsPerPage] = useState(10);
   const [search, setSearch] = useState('');
@@ -79,14 +82,16 @@ export default function CompaniesListPage() {
             : 'Your fleet companies — manage drivers, invites, and wallet.'
         }
         actions={
-          <Button
-            variant="contained"
-            startIcon={<AddIcon />}
-            component={RouterLink}
-            to="/fleet/create"
-          >
-            Create company
-          </Button>
+          canCreateCompany ? (
+            <Button
+              variant="contained"
+              startIcon={<AddIcon />}
+              component={RouterLink}
+              to="/fleet/create"
+            >
+              Create company
+            </Button>
+          ) : undefined
         }
       />
 

@@ -31,7 +31,7 @@ export const DOMAIN_SERVICES: ServiceDefinition[] = [
     name: 'user-service',
     defaultPort: 3002,
     envUrlKey: 'USERS_SERVICE_URL',
-    apiMounts: ['/onboarding', '/users', '/trips'],
+    apiMounts: ['/onboarding', '/users', '/trips', '/places'],
     needsRedis: true,
   },
   {
@@ -67,6 +67,8 @@ export const DOMAIN_SERVICES: ServiceDefinition[] = [
       '/admin/portal',
       '/admin/fleet-owners',
       '/admin/regional-fleets',
+      '/admin/fares',
+      '/admin/places',
     ],
     needsRedis: false,
   },

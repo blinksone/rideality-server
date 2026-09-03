@@ -203,6 +203,10 @@ async function main() {
   const backfill = await backfillAdminAssignments();
   console.log('Admin assignments backfilled:', backfill);
 
+  const { ensureServiceCatalog } = await import('../src/services/service-product.service');
+  await ensureServiceCatalog();
+  console.log('Service products seeded: bike, rickshaw, economy, ac, cargo');
+
   await seedPopularPlaces();
 }
 

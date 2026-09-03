@@ -20,6 +20,7 @@ export type FareConfigInput = {
   bookingFee: number;
   cancellationFee?: number;
   cargoPerKg?: number;
+  surgeMultiplier?: number;
 };
 
 const COUNTRY_DEFAULT_ROLES = new Set([
@@ -31,6 +32,13 @@ const COUNTRY_DEFAULT_ROLES = new Set([
 
 function money(value: number): number {
   return Math.round(Number(value) * 100) / 100;
+}
+
+/** Clamp Yango-style surge. 1 = normal, 1.5 = +50% demand. */
+export function clampSurge(value: number | null | undefined): number {
+  const n = Number(value);
+  if (!Number.isFinite(n) || n <= 0) return 1;
+  return Math.min(5, Math.max(0.5, Math.round(n * 100) / 100));
 }
 
 function mapFare(row: {
@@ -47,6 +55,7 @@ function mapFare(row: {
   bookingFee: Prisma.Decimal | number;
   cancellationFee: Prisma.Decimal | number;
   cargoPerKg: Prisma.Decimal | number;
+  surgeMultiplier?: Prisma.Decimal | number;
   createdAt: Date;
   updatedAt: Date;
   country?: { id: string; name: string; code: string; currency: string };
@@ -68,6 +77,7 @@ function mapFare(row: {
     bookingFee: Number(row.bookingFee),
     cancellationFee: Number(row.cancellationFee),
     cargoPerKg: Number(row.cargoPerKg),
+    surgeMultiplier: clampSurge(Number(row.surgeMultiplier ?? 1)),
     isCountryDefault: !row.cityId,
     countryName: row.country?.name ?? null,
     countryCode: row.country?.code ?? null,
@@ -237,6 +247,21 @@ export async function createFareConfig(
   const familyProduct: FareProductValue =
     catalog.family === 'cargo' || data.product === 'cargo' ? 'cargo' : 'ride';
 
+  const duplicate = await prisma.fareConfig.findFirst({
+    where: cityId
+      ? { cityId, serviceProductCode: productCode }
+      : { countryId: country.id, cityId: null, serviceProductCode: productCode },
+    select: { id: true },
+  });
+  if (duplicate) {
+    throw new ConflictError(
+      cityId
+        ? 'A fare config already exists for this city and product. Edit the existing tariff instead.'
+        : 'A country default already exists for this product. Edit the existing tariff instead.',
+      'FARE_EXISTS',
+    );
+  }
+
   try {
     const created = await prisma.fareConfig.create({
       data: {
@@ -252,6 +277,7 @@ export async function createFareConfig(
         bookingFee: data.bookingFee,
         cancellationFee: data.cancellationFee ?? 0,
         cargoPerKg: data.cargoPerKg ?? 0,
+        surgeMultiplier: clampSurge(data.surgeMultiplier),
       },
       include: FARE_INCLUDE,
     });
@@ -293,6 +319,7 @@ export async function updateFareConfig(
       ...(data.bookingFee !== undefined ? { bookingFee: data.bookingFee } : {}),
       ...(data.cancellationFee !== undefined ? { cancellationFee: data.cancellationFee } : {}),
       ...(data.cargoPerKg !== undefined ? { cargoPerKg: data.cargoPerKg } : {}),
+      ...(data.surgeMultiplier !== undefined ? { surgeMultiplier: clampSurge(data.surgeMultiplier) } : {}),
     },
     include: FARE_INCLUDE,
   });
@@ -326,6 +353,7 @@ export async function estimateTripFare(input: {
   fareConfigId: string | null;
   bookingFee: number;
   platformCommissionPercent: number;
+  surgeMultiplier: number;
 }> {
   const km = input.distanceMeters / 1000;
   const minutes = Math.max(1, (km / 22) * 60);
@@ -335,14 +363,17 @@ export async function estimateTripFare(input: {
   const byCodeCity = input.cityId
     ? await prisma.fareConfig.findFirst({
         where: { cityId: input.cityId, serviceProductCode: code },
+        orderBy: { updatedAt: 'desc' },
       })
     : null;
   const byCodeCountry = await prisma.fareConfig.findFirst({
     where: { countryId: input.countryId, cityId: null, serviceProductCode: code },
+    orderBy: { updatedAt: 'desc' },
   });
   const cityConfig = input.cityId
     ? await prisma.fareConfig.findFirst({
         where: { cityId: input.cityId, product: input.product },
+        orderBy: { updatedAt: 'desc' },
       })
     : null;
   const countryConfig =
@@ -371,27 +402,30 @@ export async function estimateTripFare(input: {
       fareConfigId: null,
       bookingFee: 0,
       platformCommissionPercent,
+      surgeMultiplier: 1,
     };
   }
 
   const bookingFee = Number(countryConfig.bookingFee);
-  let fare =
+  const surge = clampSurge(Number(countryConfig.surgeMultiplier ?? 1));
+  let core =
     Number(countryConfig.baseFare) +
     km * Number(countryConfig.perKm) +
-    minutes * Number(countryConfig.perMinute) +
-    bookingFee;
+    minutes * Number(countryConfig.perMinute);
   if (input.product === 'cargo' && input.cargoWeightKg) {
-    fare += input.cargoWeightKg * Number(countryConfig.cargoPerKg);
+    core += input.cargoWeightKg * Number(countryConfig.cargoPerKg);
   }
-  fare = Math.max(Number(countryConfig.minimumFare), fare);
+  core = Math.max(Number(countryConfig.minimumFare), core) * surge;
   if (countryConfig.serviceProductCode !== code) {
-    fare = fare * multiplier;
+    core = core * multiplier;
   }
+  const fare = core + bookingFee;
   return {
     fare: money(fare),
     currency,
     fareConfigId: countryConfig.id,
     bookingFee: money(bookingFee),
     platformCommissionPercent,
+    surgeMultiplier: surge,
   };
 }

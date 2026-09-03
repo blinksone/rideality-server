@@ -46,8 +46,9 @@ import { useActiveFleetMembership, useFleetAccessTier } from '@/hooks/useFleetPo
 import { useNotify } from '@/services/notification';
 
 function roleLabel(role: string) {
-  if (role === 'regional' || role === 'manager') return 'Regional user';
-  if (role === 'support' || role === 'dispatcher') return 'Support team';
+  if (role === 'regional' || role === 'manager') return 'Regional Fleet';
+  if (role === 'support' || role === 'dispatcher') return 'Fleet Support';
+  if (role === 'finance') return 'Fleet Finance';
   if (role === 'owner') return 'Owner';
   return formatLabel(role);
 }
@@ -59,10 +60,11 @@ export default function FleetTeamPage() {
   const tier = useFleetAccessTier(companyId);
   const membership = useActiveFleetMembership(companyId);
   const canInviteRegional = tier === 'owner';
-  const canInviteSupport = tier === 'regional';
+  const canInviteSupport = tier === 'owner' || tier === 'regional';
+  const canInviteFinance = tier === 'owner';
 
   const [createOpen, setCreateOpen] = useState(false);
-  const [inviteKind, setInviteKind] = useState<'regional' | 'support'>('support');
+  const [inviteKind, setInviteKind] = useState<'regional' | 'support' | 'finance'>('support');
   const [regionId, setRegionId] = useState(membership?.fleetRegionId ?? '');
   const [anchor, setAnchor] = useState<{ el: HTMLElement; member: FleetTeamMember } | null>(null);
   const [editTarget, setEditTarget] = useState<FleetTeamMember | null>(null);
@@ -87,7 +89,7 @@ export default function FleetTeamPage() {
   const { data: regions = [] } = useQuery({
     queryKey: ['fleet-managed-regions', companyId],
     queryFn: () => listManagedFleetRegions(companyId),
-    enabled: Boolean(companyId) && (createOpen || Boolean(editTarget) || canInviteRegional),
+    enabled: Boolean(companyId) && (createOpen || Boolean(editTarget) || canInviteRegional || canInviteFinance || canInviteSupport),
   });
 
   const roleMutation = useMutation({
@@ -188,7 +190,7 @@ export default function FleetTeamPage() {
     (r) => !occupiedCityIds.has(r.id) || r.id === editTarget?.fleetRegionId,
   );
 
-  const openCreate = (kind: 'regional' | 'support') => {
+  const openCreate = (kind: 'regional' | 'support' | 'finance') => {
     setInviteKind(kind);
     const available =
       kind === 'regional'
@@ -203,9 +205,9 @@ export default function FleetTeamPage() {
       <FleetPageHero
         badge="Access control"
         title="Team members"
-        description="Regional users manage a city. Support staff are invited by regional fleet and stay in that city."
+        description="Fleet owner creates Regional Fleet, Fleet Finance, and Fleet Support. Regional Fleet can also add Fleet Support for their city."
         actions={
-          canInviteRegional || canInviteSupport ? (
+          canInviteRegional || canInviteSupport || canInviteFinance ? (
             <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap' }}>
               {canInviteRegional && (
                 <Button
@@ -217,9 +219,14 @@ export default function FleetTeamPage() {
                   Create Regional User
                 </Button>
               )}
+              {canInviteFinance && (
+                <Button variant="contained" startIcon={<PersonAddIcon />} onClick={() => openCreate('finance')}>
+                  Create Fleet Finance
+                </Button>
+              )}
               {canInviteSupport && (
                 <Button variant="contained" startIcon={<PersonAddIcon />} onClick={() => openCreate('support')}>
-                  Create Support Team
+                  Create Fleet Support
                 </Button>
               )}
             </Box>
@@ -239,7 +246,7 @@ export default function FleetTeamPage() {
           />
         </FleetMetricCell>
       </FleetMetricRow>
-      <FleetContentCard title="Team roster" subtitle="Owners, regional users, and support team">
+      <FleetContentCard title="Team roster" subtitle="Owners, regional fleet, fleet finance, and fleet support">
         <DataTable
           columns={columns}
           rows={members ?? []}

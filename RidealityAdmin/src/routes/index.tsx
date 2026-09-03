@@ -57,7 +57,9 @@ function AppShell() {
         </Route>
         <Route element={<PermissionGuard permission={['manage_fleets', 'FLEET_VIEW']} anyPermission />}>
           <Route path="fleet" element={<CompaniesListPage />} />
-          <Route path="fleet/create" element={<CompanyCreatePage />} />
+          <Route element={<PermissionGuard permission="FLEET_CREATE" />}>
+            <Route path="fleet/create" element={<CompanyCreatePage />} />
+          </Route>
           <Route path="fleet/:id" element={<CompanyDetailPage />} />
         </Route>
         <Route element={<PermissionGuard permission="FARE_MANAGE" />}>

@@ -8,18 +8,23 @@ import {
   Button,
   Chip,
   FormControl,
+  FormControlLabel,
   Grid,
   InputLabel,
   MenuItem,
   Paper,
   Select,
+  Switch,
   Tab,
   Tabs,
   TextField,
   Typography,
 } from '@mui/material';
 import {
+  adminListFleetCityServices,
+  adminListFleetRegions,
   adminUpdateFleet,
+  adminUpdateFleetCityServices,
   getFleetCompany,
   listFleetDrivers,
   listManagedFleetRegions,
@@ -63,6 +68,7 @@ export default function CompanyDetailPage() {
   const [removeDriverId, setRemoveDriverId] = useState<string | null>(null);
   const [ownerUserId, setOwnerUserId] = useState('');
   const [ownerSearch, setOwnerSearch] = useState('');
+  const [serviceCityId, setServiceCityId] = useState('');
   const debouncedOwnerSearch = useDebounce(ownerSearch);
   const notify = useNotify();
   const queryClient = useQueryClient();
@@ -75,6 +81,11 @@ export default function CompanyDetailPage() {
     role === 'CONTINENT_ADMIN' ||
     role === 'COUNTRY_ADMIN' ||
     role === 'SUB_ADMIN';
+  const canChangeStatus =
+    canAssignOwner ||
+    role === 'REGIONAL_ADMIN' ||
+    role === 'CITY_ADMIN';
+  const canManageServices = canChangeStatus;
   const canEditProfile = isFleetOwner || canAssignOwner;
   const canViewWallet = canManageFleet || can('view_finance') || can('WALLET_VIEW');
   const canViewDrivers = canManageFleet || can('manage_drivers') || can('DRIVER_VIEW');
@@ -108,9 +119,31 @@ export default function CompanyDetailPage() {
   });
 
   const { data: cities = [] } = useQuery({
-    queryKey: ['fleet-managed-regions', id],
-    queryFn: () => listManagedFleetRegions(id),
+    queryKey: ['fleet-managed-regions', id, canManageServices],
+    queryFn: () => (canManageServices ? adminListFleetRegions(id) : listManagedFleetRegions(id)),
     enabled: Boolean(id),
+  });
+
+  const serviceCities = useMemo(() => {
+    if (!isCityScoped || !cityId) return cities;
+    const matched = cities.filter((c) => c.geoCityId === cityId);
+    return matched.length ? matched : cities;
+  }, [cities, cityId, isCityScoped]);
+
+  useEffect(() => {
+    if (!serviceCities.length) {
+      setServiceCityId('');
+      return;
+    }
+    setServiceCityId((current) =>
+      serviceCities.some((c) => c.id === current) ? current : serviceCities[0].id,
+    );
+  }, [serviceCities]);
+
+  const { data: cityServices = [], isLoading: servicesLoading } = useQuery({
+    queryKey: ['admin-fleet-city-services', id, serviceCityId],
+    queryFn: () => adminListFleetCityServices(id, serviceCityId),
+    enabled: Boolean(id && serviceCityId && canManageServices),
   });
 
   const { data: ownerCandidatesData, isFetching: ownerCandidatesLoading } = useQuery({
@@ -123,16 +156,25 @@ export default function CompanyDetailPage() {
   const ownerCandidates = (ownerCandidatesData?.data ?? []).filter((u) => u.status === 'ACTIVE');
 
   const updateMutation = useMutation({
-    mutationFn: () => {
+    mutationFn: (override?: { status?: FleetCompanyStatus }) => {
+      const nextStatus = override?.status ?? status;
+      const trimmedReason = nextStatus === 'active' ? '' : statusReason.trim();
       if (canAssignOwner) {
-        const trimmedReason = statusReason.trim();
         return adminUpdateFleet(id, {
           legalName,
           taxId: taxId || null,
-          status,
+          status: nextStatus,
           regionId: regionId || undefined,
           ...(ownerUserId ? { ownerUserId } : {}),
-          ...(status === 'suspended' || status === 'pending'
+          ...(nextStatus === 'suspended' || nextStatus === 'pending'
+            ? { statusReason: trimmedReason || null }
+            : { statusReason: null }),
+        });
+      }
+      if (canChangeStatus) {
+        return adminUpdateFleet(id, {
+          status: nextStatus,
+          ...(nextStatus === 'suspended' || nextStatus === 'pending'
             ? { statusReason: trimmedReason || null }
             : { statusReason: null }),
         });
@@ -156,6 +198,16 @@ export default function CompanyDetailPage() {
       notify.success('Driver removed');
       setRemoveDriverId(null);
       queryClient.invalidateQueries({ queryKey: ['fleet-drivers', id] });
+    },
+    onError: (e) => notify.error(getApiErrorMessage(e)),
+  });
+
+  const servicesMutation = useMutation({
+    mutationFn: (products: Array<{ code: string; enabled: boolean }>) =>
+      adminUpdateFleetCityServices(id, serviceCityId, products),
+    onSuccess: () => {
+      notify.success('City services updated');
+      queryClient.invalidateQueries({ queryKey: ['admin-fleet-city-services', id, serviceCityId] });
     },
     onError: (e) => notify.error(getApiErrorMessage(e)),
   });
@@ -237,8 +289,27 @@ export default function CompanyDetailPage() {
       />
 
       {company.status === 'pending' && (
-        <Alert severity="info" sx={{ mb: 2 }}>
-          This fleet is <strong>pending approval</strong>. Set status to <strong>Active</strong> below to approve it for operations.
+        <Alert
+          severity="info"
+          sx={{ mb: 2 }}
+          action={
+            canChangeStatus ? (
+              <Button
+                color="inherit"
+                variant="contained"
+                size="small"
+                disabled={updateMutation.isPending}
+                onClick={() => updateMutation.mutate({ status: 'active' })}
+              >
+                Approve fleet
+              </Button>
+            ) : undefined
+          }
+        >
+          This fleet is <strong>pending approval</strong>.
+          {canChangeStatus
+            ? ' Use Approve fleet, or set status to Active in Fleet status below.'
+            : ' Ask a city or country admin to set status to Active.'}
           {company.statusReason ? (
             <>
               {' '}
@@ -273,7 +344,7 @@ export default function CompanyDetailPage() {
 
       {tab === 'overview' && (
         <Grid container spacing={2}>
-          <Grid size={{ xs: 12, md: canEditProfile ? 5 : 12 }}>
+          <Grid size={{ xs: 12, md: canEditProfile || (canChangeStatus && !canAssignOwner) ? 5 : 12 }}>
             <Paper variant="outlined" sx={{ p: 2 }}>
               <Typography variant="subtitle2" gutterBottom>
                 Details
@@ -301,6 +372,139 @@ export default function CompanyDetailPage() {
               <Typography variant="body2">Created: {formatDate(company.createdAt)}</Typography>
             </Paper>
           </Grid>
+          {canManageServices && (
+            <Grid size={{ xs: 12 }}>
+              <Paper variant="outlined" sx={{ p: 2 }}>
+                <Typography variant="subtitle2" gutterBottom>
+                  Services in this city
+                </Typography>
+                <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+                  Enable or disable what this fleet offers (Bike, Rickshaw, Economy, AC, Cargo). Riders only see
+                  enabled products with the city fare.
+                </Typography>
+                {serviceCities.length > 1 && (
+                  <FormControl size="small" sx={{ minWidth: 220, mb: 2 }}>
+                    <InputLabel id="fleet-service-city-label">City</InputLabel>
+                    <Select
+                      labelId="fleet-service-city-label"
+                      label="City"
+                      value={serviceCityId}
+                      onChange={(e) => setServiceCityId(e.target.value)}
+                    >
+                      {serviceCities.map((c) => (
+                        <MenuItem key={c.id} value={c.id}>
+                          {c.name}
+                        </MenuItem>
+                      ))}
+                    </Select>
+                  </FormControl>
+                )}
+                {servicesLoading ? (
+                  <Typography variant="body2" color="text.secondary">
+                    Loading services…
+                  </Typography>
+                ) : !serviceCityId || cityServices.length === 0 ? (
+                  <Typography variant="body2" color="text.secondary">
+                    No catalog products yet for this city.
+                  </Typography>
+                ) : (
+                  <Box>
+                    {(['taxi', 'cargo'] as const).map((family) => {
+                      const rows = cityServices.filter((s) => s.family === family);
+                      if (!rows.length) return null;
+                      return (
+                        <Box key={family} sx={{ mb: 1.5 }}>
+                          <Typography variant="subtitle2" sx={{ mb: 0.5 }}>
+                            {family === 'taxi' ? 'Taxi' : 'Cargo'}
+                          </Typography>
+                          {rows.map((row) => (
+                            <FormControlLabel
+                              key={row.code}
+                              sx={{ display: 'flex', ml: 0 }}
+                              control={
+                                <Switch
+                                  checked={row.enabled}
+                                  disabled={servicesMutation.isPending}
+                                  onChange={(_, enabled) =>
+                                    servicesMutation.mutate(
+                                      cityServices.map((item) =>
+                                        item.code === row.code
+                                          ? { code: item.code, enabled }
+                                          : { code: item.code, enabled: item.enabled },
+                                      ),
+                                    )
+                                  }
+                                />
+                              }
+                              label={`${row.label} (${row.code})`}
+                            />
+                          ))}
+                        </Box>
+                      );
+                    })}
+                  </Box>
+                )}
+              </Paper>
+            </Grid>
+          )}
+          {canChangeStatus && !canAssignOwner && (
+            <Grid size={{ xs: 12, md: 7 }}>
+              <Paper variant="outlined" sx={{ p: 2 }}>
+                <Typography variant="subtitle2" gutterBottom>
+                  Fleet status
+                </Typography>
+                <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+                  Pending fleets cannot operate until you set status to Active.
+                </Typography>
+                <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+                  <FormControl fullWidth>
+                    <InputLabel id="fleet-status-city-label">Status</InputLabel>
+                    <Select
+                      labelId="fleet-status-city-label"
+                      label="Status"
+                      value={status}
+                      onChange={(e) => {
+                        const next = e.target.value as FleetCompanyStatus;
+                        setStatus(next);
+                        if (next === 'active') setStatusReason('');
+                      }}
+                    >
+                      <MenuItem value="pending">Pending</MenuItem>
+                      <MenuItem value="active">Active</MenuItem>
+                      <MenuItem value="suspended">Suspended</MenuItem>
+                    </Select>
+                  </FormControl>
+                  {(status === 'suspended' || status === 'pending') && (
+                    <TextField
+                      label={status === 'suspended' ? 'Suspension reason' : 'Status reason (optional)'}
+                      value={statusReason}
+                      onChange={(e) => setStatusReason(e.target.value.slice(0, 500))}
+                      fullWidth
+                      required={status === 'suspended'}
+                      multiline
+                      minRows={2}
+                      inputProps={{ maxLength: 500 }}
+                      helperText={
+                        status === 'suspended'
+                          ? 'Required — shown to fleet staff when they try to sign in'
+                          : 'Optional — shown to fleet staff if they try to sign in while pending'
+                      }
+                    />
+                  )}
+                  <Button
+                    variant="contained"
+                    onClick={() => updateMutation.mutate()}
+                    disabled={
+                      updateMutation.isPending ||
+                      (status === 'suspended' && statusReason.trim().length < 3)
+                    }
+                  >
+                    Save status
+                  </Button>
+                </Box>
+              </Paper>
+            </Grid>
+          )}
           {canEditProfile && (
             <Grid size={{ xs: 12, md: 7 }}>
               <Paper variant="outlined" sx={{ p: 2 }}>

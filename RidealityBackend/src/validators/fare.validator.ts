@@ -23,6 +23,7 @@ export const createFareConfigSchema = z.object({
   bookingFee: moneyField,
   cancellationFee: moneyField.optional(),
   cargoPerKg: moneyField.optional(),
+  surgeMultiplier: z.coerce.number().min(0.5).max(5).optional(),
 }).refine((d) => Boolean(d.product || d.serviceProductCode), {
   message: 'Provide product or serviceProductCode',
 });
@@ -35,4 +36,5 @@ export const updateFareConfigSchema = z.object({
   bookingFee: moneyField.optional(),
   cancellationFee: moneyField.optional(),
   cargoPerKg: moneyField.optional(),
+  surgeMultiplier: z.coerce.number().min(0.5).max(5).optional(),
 });

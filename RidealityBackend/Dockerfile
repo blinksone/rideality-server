@@ -12,9 +12,11 @@ RUN npx prisma generate && npm run build
 
 FROM node:22-alpine AS runner
 WORKDIR /app
+RUN apk add --no-cache openssl libc6-compat
 ENV NODE_ENV=production
 COPY package.json package-lock.json ./
 COPY prisma ./prisma
+COPY src ./src
 COPY --from=deps /app/node_modules ./node_modules
 COPY --from=build /app/dist ./dist
 RUN npx prisma generate && mkdir -p uploads logs

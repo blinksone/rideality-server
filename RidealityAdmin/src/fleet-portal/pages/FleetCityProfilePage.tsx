@@ -44,7 +44,7 @@ import FleetMetricRow, { FleetMetricCell } from '@/fleet-portal/components/Fleet
 import FleetPageHero from '@/fleet-portal/components/FleetPageHero';
 import FleetDriverDetailDialog from '@/fleet-portal/components/FleetDriverDetailDialog';
 import { fleetPath } from '@/fleet-portal/fleetNavConfig';
-import { useActiveFleetMembership, useFleetAccessTier } from '@/hooks/useFleetPortalMode';
+import { useFleetAccessTier } from '@/hooks/useFleetPortalMode';
 import { useNotify } from '@/services/notification';
 import { formatDate, formatLabel } from '@/utils/format';
 
@@ -60,7 +60,6 @@ const CITY_TABS = ['overview', 'drivers', 'vehicles', 'trips', 'wallets', 'ticke
 
 export default function FleetCityProfilePage() {
   const { companyId = '', regionId = '' } = useParams();
-  const membership = useActiveFleetMembership(companyId);
   const tier = useFleetAccessTier(companyId);
   const [searchParams, setSearchParams] = useSearchParams();
   const tabKey = CITY_TABS.includes(searchParams.get('tab') as (typeof CITY_TABS)[number])
@@ -83,7 +82,7 @@ export default function FleetCityProfilePage() {
   const { data, isLoading, error } = useQuery({
     queryKey: ['fleet-city-profile', companyId, regionId],
     queryFn: () => getFleetCityProfile(companyId, regionId),
-    enabled: Boolean(companyId && regionId && membership),
+    enabled: Boolean(companyId && regionId),
   });
 
   const invalidateCity = () => {
@@ -369,7 +368,9 @@ export default function FleetCityProfilePage() {
         description={
           tier === 'support'
             ? 'Handle tickets and driver assistance in this city. Regional fleet supervises this desk.'
-            : 'Supervise this city. Fleet Support handles tickets and driver assistance; you can open the queue and step in when needed.'
+            : tier === 'owner'
+              ? 'Enable or disable Bike, Economy, AC and cargo for riders in this city.'
+              : 'Supervise this city. Fleet Support handles tickets and driver assistance; you can open the queue and step in when needed.'
         }
         actions={
           tier === 'owner' ? (
@@ -470,7 +471,7 @@ export default function FleetCityProfilePage() {
                 })}
                 {tier !== 'owner' && (
                   <Typography variant="caption" color="text.secondary">
-                    Only the fleet owner can change services.
+                    Fleet owner and city admin can change which services this fleet offers.
                   </Typography>
                 )}
               </Box>

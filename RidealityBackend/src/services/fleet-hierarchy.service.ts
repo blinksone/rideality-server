@@ -30,6 +30,7 @@ import {
   getAdminAssignment,
   isSuperAdminRole,
   rolesInvitableFrom,
+  scopedFleetCompanyWhere,
   scopedVisibleUserWhere,
   scopeAllows,
   upsertAdminAssignment,
@@ -78,6 +79,25 @@ function staffTypeToPlatformRole(type: PlatformStaffType): PlatformRole {
 
 function staffTypeToAdminRole(type: PlatformStaffType): AdminRole {
   return type;
+}
+
+function parseCreateStaffRole(role: string): FleetMemberRole {
+  const value = role.toLowerCase();
+  if (value === 'regional') return FleetMemberRole.regional;
+  if (value === 'finance' || value === 'fleet_finance') return FleetMemberRole.finance;
+  return FleetMemberRole.support;
+}
+
+function adminRoleForMember(role: FleetMemberRole): AdminRole {
+  if (role === FleetMemberRole.regional) return 'REGIONAL_FLEET';
+  if (role === FleetMemberRole.finance) return 'FLEET_FINANCE';
+  return 'FLEET_SUPPORT';
+}
+
+function platformRoleForMember(role: FleetMemberRole): PlatformRole {
+  if (role === FleetMemberRole.regional) return PlatformRole.FLEET_MANAGER;
+  if (role === FleetMemberRole.finance) return PlatformRole.FINANCE_OFFICER;
+  return PlatformRole.SUPPORT_AGENT;
 }
 
 async function findActorFleetCompany(actorId: string) {
@@ -481,14 +501,95 @@ export async function listFleetCityServices(fleetRegionId: string) {
   }));
 }
 
+const GEO_SERVICE_ROLES = new Set([
+  'SUPER_ADMIN',
+  'GLOBAL_ADMIN',
+  'CONTINENT_ADMIN',
+  'COUNTRY_ADMIN',
+  'REGIONAL_ADMIN',
+  'CITY_ADMIN',
+  'SUB_ADMIN',
+]);
+
+async function assertCanManageCityServices(
+  companyId: string,
+  requesterId: string,
+  region: { geoCityId: string | null },
+) {
+  const assignment = await getAdminAssignment(requesterId);
+  if (assignment && GEO_SERVICE_ROLES.has(assignment.role)) {
+    if (!isSuperAdminRole(assignment.role)) {
+      const inScope = await prisma.fleetCompany.findFirst({
+        where: { id: companyId, AND: [scopedFleetCompanyWhere(assignment)] },
+      });
+      if (!inScope) throw new ForbiddenError('Fleet is outside your assigned scope');
+      if (
+        assignment.scopeType === 'CITY' &&
+        assignment.cityId &&
+        region.geoCityId &&
+        assignment.cityId !== region.geoCityId
+      ) {
+        throw new ForbiddenError('You can only manage services for your assigned city');
+      }
+    }
+    return;
+  }
+
+  const access = await assertFleetAccess(companyId, requesterId);
+  if (!access.isPlatformAdmin && access.tier !== 'owner') {
+    throw new ForbiddenError('Only fleet owner or city admin can change city services');
+  }
+}
+
+export async function getFleetCityServicesForAdmin(
+  companyId: string,
+  requesterId: string,
+  regionId: string,
+) {
+  const region = await assertFleetRegion(companyId, regionId);
+  await assertCanManageCityServices(companyId, requesterId, region);
+  return listFleetCityServices(regionId);
+}
+
+export async function adminListFleetRegions(companyId: string, requesterId: string) {
+  const assignment = await getAdminAssignment(requesterId);
+  if (assignment && !isSuperAdminRole(assignment.role)) {
+    const inScope = await prisma.fleetCompany.findFirst({
+      where: { id: companyId, AND: [scopedFleetCompanyWhere(assignment)] },
+    });
+    if (!inScope) throw new ForbiddenError('Fleet is outside your assigned scope');
+  } else if (!assignment) {
+    await assertFleetAccess(companyId, requesterId);
+  }
+
+  const regions = await prisma.fleetRegion.findMany({
+    where: {
+      fleetCompanyId: companyId,
+      ...(assignment?.scopeType === 'CITY' && assignment.cityId
+        ? { OR: [{ geoCityId: assignment.cityId }, { geoCityId: null }] }
+        : {}),
+    },
+    orderBy: { name: 'asc' },
+    select: {
+      id: true,
+      name: true,
+      fleetCompanyId: true,
+      createdAt: true,
+      provinceId: true,
+      geoCityId: true,
+    },
+  });
+  return regions.map((region) => ({ ...region, driverCount: 0 }));
+}
+
 export async function setFleetCityServices(
   companyId: string,
   requesterId: string,
   regionId: string,
   products: Array<{ code: string; enabled: boolean }>,
 ) {
-  await assertFleetOwner(companyId, requesterId);
-  await assertFleetRegion(companyId, regionId);
+  const region = await assertFleetRegion(companyId, regionId);
+  await assertCanManageCityServices(companyId, requesterId, region);
   const catalog = await prisma.serviceProduct.findMany({ where: { isActive: true } });
   const allowed = new Set(catalog.map((row) => row.code));
   for (const row of products) {
@@ -624,7 +725,7 @@ export async function inviteFleetSupport(
 ) {
   const access = await assertFleetAccess(companyId, requesterId);
   if (!access.canInviteSupport) {
-    throw new ForbiddenError('Only regional fleet can invite fleet support');
+    throw new ForbiddenError('Only fleet owner or regional fleet can invite fleet support');
   }
   const assignment = await getAdminAssignment(requesterId);
   let cityId = data.fleetRegionId ?? access.fleetRegionId ?? assignment?.cityId ?? null;
@@ -647,45 +748,41 @@ export async function createFleetStaffUser(
   companyId: string,
   requesterId: string,
   data: {
-    role: 'REGIONAL' | 'SUPPORT' | 'regional' | 'support';
+    role: string;
     fleetRegionId?: string;
     fullName: string;
     email: string;
     phone: string;
   },
 ) {
-  const memberRole =
-    data.role === 'REGIONAL' || data.role === 'regional'
-      ? FleetMemberRole.regional
-      : FleetMemberRole.support;
-
+  const memberRole = parseCreateStaffRole(data.role);
   const access = await assertFleetAccess(companyId, requesterId);
   const assignment = await getAdminAssignment(requesterId);
-  if (memberRole === FleetMemberRole.regional) {
-    if (!access.canInviteRegional) {
-      throw new ForbiddenError('Only fleet owner can create regional fleet users');
-    }
-    if (assignment) await assertCanInvite(assignment, 'REGIONAL_FLEET', { cityId: data.fleetRegionId });
+
+  if (memberRole === FleetMemberRole.regional && !access.canInviteRegional) {
+    throw new ForbiddenError('Only fleet owner can create regional fleet users');
   }
-  if (memberRole === FleetMemberRole.support) {
-    if (!access.canInviteSupport) {
-      throw new ForbiddenError('Only regional fleet can create fleet support users');
-    }
-    if (assignment) {
-      const scoped = await assertCanInvite(assignment, 'FLEET_SUPPORT', { cityId: data.fleetRegionId });
-      data.fleetRegionId = scoped.cityId ?? data.fleetRegionId;
-    } else if (!data.fleetRegionId) {
-      data.fleetRegionId = access.fleetRegionId ?? undefined;
-    }
+  if (memberRole === FleetMemberRole.support && !access.canInviteSupport) {
+    throw new ForbiddenError('Only fleet owner or regional fleet can create fleet support users');
+  }
+  if (memberRole === FleetMemberRole.finance && !access.canInviteFinance) {
+    throw new ForbiddenError('Only fleet owner can create fleet finance users');
   }
 
-  let region: Awaited<ReturnType<typeof assertFleetRegion>> | null = null;
+  if (access.fleetRegionId) {
+    data.fleetRegionId = access.fleetRegionId;
+  }
+  if (!data.fleetRegionId) {
+    throw new ValidationError('City is required');
+  }
+
+  const region = await assertFleetRegion(companyId, data.fleetRegionId);
   if (memberRole === FleetMemberRole.regional) {
-    if (!data.fleetRegionId) throw new ValidationError('City is required for regional fleet');
-    region = await assertFleetRegion(companyId, data.fleetRegionId);
     await assertCityHasNoRegionalUser(companyId, data.fleetRegionId);
-  } else if (data.fleetRegionId) {
-    region = await assertFleetRegion(companyId, data.fleetRegionId);
+  }
+
+  if (assignment && region.geoCityId) {
+    await assertCanInvite(assignment, adminRoleForMember(memberRole), { cityId: region.geoCityId });
   }
 
   const company = await prisma.fleetCompany.findUnique({
@@ -728,9 +825,7 @@ export async function createFleetStaffUser(
         passengerProfile: { create: {} },
         notificationPrefs: { create: {} },
         wallet: { create: { currency: company.region.currency } },
-        ...(memberRole === FleetMemberRole.regional
-          ? { platformRoles: { create: { role: PlatformRole.FLEET_MANAGER } } }
-          : {}),
+        platformRoles: { create: { role: platformRoleForMember(memberRole) } },
       },
     });
 
@@ -739,7 +834,7 @@ export async function createFleetStaffUser(
         fleetCompanyId: companyId,
         userId: created.id,
         role: memberRole,
-        fleetRegionId: region?.id ?? null,
+        fleetRegionId: region.id,
         invitedByUserId: requesterId,
         status: FleetMemberStatus.active,
       },
@@ -750,9 +845,9 @@ export async function createFleetStaffUser(
 
   await upsertAdminAssignment({
     userId: user.id,
-    role: memberRole === FleetMemberRole.regional ? 'REGIONAL_FLEET' : 'FLEET_SUPPORT',
+    role: adminRoleForMember(memberRole),
     countryId: company.regionId,
-    cityId: region?.geoCityId ?? null,
+    cityId: region.geoCityId ?? null,
     invitedByUserId: requesterId,
   });
 
@@ -762,7 +857,7 @@ export async function createFleetStaffUser(
       fleetCompanyId: companyId,
       targetUserId: user.id,
       action: 'fleet.staff.created',
-      details: { role: memberRole, fleetRegionId: region?.id ?? null, email },
+      details: { role: memberRole, fleetRegionId: region.id, email },
     },
   });
 
@@ -772,8 +867,8 @@ export async function createFleetStaffUser(
     phone: user.phone,
     fullName: data.fullName.trim(),
     role: normalizeMemberRole(memberRole),
-    fleetRegionId: region?.id ?? null,
-    fleetRegionName: region?.name ?? null,
+    fleetRegionId: region.id,
+    fleetRegionName: region.name,
     temporaryPassword,
   };
 }

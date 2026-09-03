@@ -21,7 +21,7 @@ import { getApiErrorMessage } from '@/api/client';
 import { copyToClipboard } from '@/utils/clipboard';
 import { useNotify } from '@/services/notification';
 
-type StaffRole = 'regional' | 'support';
+type StaffRole = 'regional' | 'support' | 'finance';
 
 interface Props {
   open: boolean;
@@ -70,7 +70,8 @@ export default function CreateFleetStaffDialog({
     ? phone.trim()
     : `${(phonePrefix ?? '').replace(/\s/g, '')}${localDigits}`;
 
-  const title = role === 'regional' ? 'Create Regional User' : 'Create Support Team';
+  const title =
+    role === 'regional' ? 'Create Regional User' : role === 'finance' ? 'Create Fleet Finance' : 'Create Fleet Support';
 
   const mutation = useMutation({
     mutationFn: () =>
@@ -92,7 +93,7 @@ export default function CreateFleetStaffDialog({
     fullName.trim().length >= 2 &&
     email.trim().includes('@') &&
     localDigits.length >= 7 &&
-    (role === 'support' || Boolean(cityId));
+    Boolean(cityId);
 
   const handleCopy = async (label: string, value: string) => {
     try {
@@ -117,11 +118,15 @@ export default function CreateFleetStaffDialog({
             <Alert severity="info">
               {role === 'regional'
                 ? 'This person manages drivers and documents for one city. Each city can have only one regional user. A temporary password is shown once.'
-                : 'This person handles driver support in your city. They can view drivers and tickets but cannot approve documents.'}
+                : role === 'finance'
+                  ? 'This person records cash and bank credits for drivers in the selected city. You approve those credits before they post to the driver wallet.'
+                  : 'This person handles driver support in the selected city. They can view drivers and tickets but cannot approve documents.'}
             </Alert>
-            {role === 'regional' && cities.length === 0 && (
+            {cities.length === 0 && (
               <Alert severity="warning">
-                All cities already have a regional user. Remove or reassign one before creating another.
+                {role === 'regional'
+                  ? 'All cities already have a regional user. Remove or reassign one before creating another.'
+                  : 'Add a city to this fleet before creating this user.'}
               </Alert>
             )}
             <TextField
@@ -156,7 +161,7 @@ export default function CreateFleetStaffDialog({
                 },
               }}
             />
-            {(role === 'regional' || role === 'support') && (
+            {(role === 'regional' || role === 'support' || role === 'finance') && (
             <TextField
               select
               fullWidth
@@ -179,7 +184,7 @@ export default function CreateFleetStaffDialog({
             </Button>
             <Button
               variant="contained"
-              disabled={!canSubmit || mutation.isPending || (role === 'regional' && cities.length === 0)}
+              disabled={!canSubmit || mutation.isPending || cities.length === 0}
               onClick={() => mutation.mutate()}
             >
               Create
